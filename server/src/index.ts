@@ -3,7 +3,7 @@ import { nodeTools } from './tools/node_tools.js';
 import { scriptTools } from './tools/script_tools.js';
 import { sceneTools } from './tools/scene_tools.js';
 import { editorTools } from './tools/editor_tools.js';
-import { aiScriptTemplateTool, updateNodeTransformTool } from './tools/ai_script_tools.js';
+import { aiScriptTemplateTool, updateNodeTransformTool } from './resources/ai_script_tools.js';
 import { getGodotConnection } from './utils/godot_connection.js';
 
 // Import resources
@@ -56,6 +56,7 @@ async function main() {
   
   allTools.forEach(tool => {
     server.addTool(tool);
+    console.error(`Registered tool: ${tool.name}`);
   });
 
   // Register all resources
@@ -79,6 +80,8 @@ async function main() {
   server.addResourceTemplate(dynamicScriptWriteResource);
   server.addResourceTemplate(assetListResource);
 
+  console.error('All resources and tools registered');
+
   // Try to connect to Godot
   try {
     const godot = getGodotConnection();
@@ -96,6 +99,7 @@ async function main() {
   });
 
   console.error('Enhanced Godot MCP server started');
+  console.error('Ready to process commands from Claude or other AI assistants');
 
   // Handle cleanup
   const cleanup = () => {

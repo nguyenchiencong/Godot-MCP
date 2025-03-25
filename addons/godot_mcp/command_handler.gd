@@ -68,6 +68,17 @@ func _initialize_command_processors():
 	add_child(enhanced_commands)
 	add_child(script_resource_commands)
 	add_child(asset_commands)
+	
+	print("Command processors initialized:")
+	print("- Node Commands")
+	print("- Script Commands")
+	print("- Scene Commands")
+	print("- Project Commands")
+	print("- Editor Commands")
+	print("- Editor Script Commands")
+	print("- Enhanced Commands")
+	print("- Script Resource Commands")
+	print("- Asset Commands")
 
 func _handle_command(client_id: int, command: Dictionary) -> void:
 	var command_type = command.get("type", "")
@@ -79,6 +90,7 @@ func _handle_command(client_id: int, command: Dictionary) -> void:
 	# Try each processor until one handles the command
 	for processor in _command_processors:
 		if processor.process_command(client_id, command_type, params, command_id):
+			print("Command %s handled by %s" % [command_type, processor.get_class()])
 			return
 	
 	# If no processor handled the command, send an error

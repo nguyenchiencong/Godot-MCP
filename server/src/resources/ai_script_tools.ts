@@ -3,7 +3,7 @@ import { getGodotConnection } from '../utils/godot_connection.js';
 import { MCPTool } from '../utils/types.js';
 
 /**
- * Tool for generating GDScript with AI assistance
+ * Tool for generating GDScript with AI assistance using MCP
  */
 export const aiScriptTemplateTool: MCPTool = {
   name: 'ai_generate_script',
@@ -20,63 +20,27 @@ export const aiScriptTemplateTool: MCPTool = {
   }),
   
   execute: async ({ description, node_type = "Node", create_file = false, file_path = "" }): Promise<string> => {
-    // This function would ideally connect to an LLM API
-    // For now, we'll use a template approach as a placeholder
+    const godot = getGodotConnection();
     
-    // Generate a template based on the description and node_type
-    let scriptContent = generateScriptTemplate(description, node_type);
-    
-    // If requested, create the file in Godot
-    if (create_file && file_path) {
-      const godot = getGodotConnection();
+    try {
+      // Using the MCP command that's already defined in the Godot plugin
+      const result = await godot.sendCommand('ai_generate_script', {
+        description,
+        node_type,
+        create_file,
+        file_path
+      });
       
-      try {
-        await godot.sendCommand('create_script', {
-          script_path: file_path,
-          content: scriptContent
-        });
-        
-        return `Generated script based on "${description}" and saved to ${file_path}:\n\n\`\`\`gdscript\n${scriptContent}\n\`\`\``;
-      } catch (error) {
-        throw new Error(`Failed to create script file: ${(error as Error).message}`);
+      if (create_file && file_path && result.success) {
+        return `Generated script based on "${description}" and saved to ${file_path}:\n\n\`\`\`gdscript\n${result.content}\n\`\`\``;
       }
+      
+      return `Generated script based on "${description}":\n\n\`\`\`gdscript\n${result.content}\n\`\`\``;
+    } catch (error) {
+      throw new Error(`Failed to generate script: ${(error as Error).message}`);
     }
-    
-    return `Generated script based on "${description}":\n\n\`\`\`gdscript\n${scriptContent}\n\`\`\``;
   },
 };
-
-/**
- * Simple template generator function (placeholder for LLM integration)
- */
-function generateScriptTemplate(description: string, nodeType: string): string {
-  const className = nodeType.replace(/[^a-zA-Z0-9_]/g, '');
-  
-  // Sanitize description for comments
-  const safeDescription = description.replace(/[#]/, '');
-  
-  // Create a basic template
-  return `# ${safeDescription}
-extends ${nodeType}
-
-# Signals
-
-# Export variables
-
-# Private variables
-
-func _ready():
-	# Initialize the ${nodeType}
-	pass
-
-func _process(delta):
-	# Process logic for ${safeDescription}
-	pass
-
-# Custom methods
-
-`;
-}
 
 /**
  * Tool for node transform operations
@@ -97,25 +61,13 @@ export const updateNodeTransformTool: MCPTool = {
   
   execute: async ({ node_path, position, rotation, scale }): Promise<string> => {
     const godot = getGodotConnection();
-    const updates: Record<string, any> = {};
-    
-    if (position) {
-      updates.position = { x: position[0], y: position[1] };
-    }
-    
-    if (rotation !== undefined) {
-      updates.rotation = rotation;
-    }
-    
-    if (scale) {
-      updates.scale = { x: scale[0], y: scale[1] };
-    }
     
     try {
-      await godot.sendCommand('update_node_property', {
+      const result = await godot.sendCommand('update_node_transform', {
         node_path,
-        property: '_transform',
-        value: updates
+        position,
+        rotation,
+        scale
       });
       
       let changeDescription = [];

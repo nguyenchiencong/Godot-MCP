@@ -25,6 +25,8 @@ export interface GodotCommand {
 export class GodotConnection {
   private ws: WebSocket | null = null;
   private connected = false;
+  private reconnecting = false;
+  private pingInterval: NodeJS.Timeout | null = null;
   private commandQueue: Map<string, { 
     resolve: (value: any) => void;
     reject: (reason: any) => void;
@@ -61,15 +63,15 @@ export class GodotConnection {
         console.error(`Connecting to Godot WebSocket server at ${this.url}... (Attempt ${retries + 1}/${this.maxRetries + 1})`);
         
         // Use protocol option to match Godot's supported_protocols
-        this.ws = new WebSocket(this.url, {
-          protocol: 'json',
-          handshakeTimeout: 8000,  // Increase handshake timeout
-          perMessageDeflate: false // Disable compression for compatibility
-        });
+        this.ws = new WebSocket(this.url, ['json']);
         
         this.ws.on('open', () => {
           this.connected = true;
           console.error('Connected to Godot WebSocket server');
+          
+          // Set up ping interval to keep connection alive
+          this.setupKeepAlive();
+          
           resolve();
         });
         
@@ -100,16 +102,31 @@ export class GodotConnection {
         });
         
         this.ws.on('error', (error) => {
-          const err = error as Error;
-          console.error('WebSocket error:', err);
+          console.error('WebSocket error:', error);
           // Don't terminate the connection on error - let the timeout handle it
-          // Just log the error and allow retry mechanism to work
         });
         
         this.ws.on('close', () => {
           if (this.connected) {
             console.error('Disconnected from Godot WebSocket server');
             this.connected = false;
+            
+            // Clear ping interval
+            if (this.pingInterval) {
+              clearInterval(this.pingInterval);
+              this.pingInterval = null;
+            }
+            
+            // Try to reconnect after a delay
+            if (!this.reconnecting) {
+              this.reconnecting = true;
+              setTimeout(() => {
+                this.reconnecting = false;
+                this.connect().catch(() => {
+                  // Silent catch - we don't want to crash on reconnect failure
+                });
+              }, this.retryDelay);
+            }
           }
         });
         
@@ -146,6 +163,45 @@ export class GodotConnection {
         }
       }
     }
+  }
+  
+  /**
+   * Sets up a keep-alive mechanism to prevent the connection from timing out
+   */
+  private setupKeepAlive(): void {
+    // Clear any existing interval
+    if (this.pingInterval) {
+      clearInterval(this.pingInterval);
+    }
+    
+    // Set up ping every 30 seconds to keep connection alive
+    this.pingInterval = setInterval(() => {
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        // Send a ping command
+        const pingCommand = {
+          jsonrpc: '2.0',
+          method: 'ping',
+          id: `ping_${Date.now()}`
+        };
+        
+        this.ws.send(JSON.stringify(pingCommand));
+      } else {
+        // Connection lost, clear interval
+        clearInterval(this.pingInterval!);
+        this.pingInterval = null;
+        
+        // Try to reconnect
+        if (!this.reconnecting && !this.connected) {
+          this.reconnecting = true;
+          setTimeout(() => {
+            this.reconnecting = false;
+            this.connect().catch(err => {
+              console.error('Failed to reconnect:', err);
+            });
+          }, this.retryDelay);
+        }
+      }
+    }, 30000);
   }
   
   /**
@@ -202,6 +258,11 @@ export class GodotConnection {
    * Disconnects from the Godot WebSocket server
    */
   disconnect(): void {
+    if (this.pingInterval) {
+      clearInterval(this.pingInterval);
+      this.pingInterval = null;
+    }
+    
     if (this.ws) {
       // Clear all pending commands
       this.commandQueue.forEach((command, commandId) => {

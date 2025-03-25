@@ -57,6 +57,10 @@ func _enter_tree():
 	else:
 		printerr("Failed to listen on port", port, "error:", err)
 	
+	# Add a notification to let users know the server is running
+	print("Server status: Listening on port", port)
+	print("MCP Server is ready to receive connections")
+	
 	print("=== MCP SERVER INITIALIZED ===\n")
 
 func _exit_tree():
@@ -200,20 +204,15 @@ func _process(_delta):
 							
 							print("[Client ", id, "] Processing JSON-RPC method: ", method_name)
 							
-							# For now, just send a generic success response
-							# TODO: Route these to command handler as well
-							var response = {
-								"jsonrpc": "2.0",
-								"id": req_id,
-								"result": {
-									"status": "success",
-									"message": "Command processed"
-								}
+							# Convert JSON-RPC to MCP command format
+							var command = {
+								"type": method_name,
+								"params": params,
+								"commandId": req_id
 							}
 							
-							var response_text = JSON.stringify(response)
-							var send_result = client.ws.send_text(response_text)
-							print("[Client ", id, "] SENT RESPONSE: ", response_text, " (result: ", send_result, ")")
+							# Route command to command handler via signal
+							emit_signal("command_received", id, command)
 					
 					# Handle legacy command format - This is what Claude Code uses
 					elif data.has("type"):
@@ -265,3 +264,11 @@ func stop_server() -> void:
 		
 func get_port() -> int:
 	return port
+
+# Helper function for command processors to access EditorInterface
+func get_editor_interface():
+	return get_editor_interface()
+
+# Helper function for command processors to get undo/redo manager
+func get_undo_redo():
+	return get_undo_redo()
