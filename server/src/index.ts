@@ -3,7 +3,6 @@ import { nodeTools } from './tools/node_tools.js';
 import { scriptTools } from './tools/script_tools.js';
 import { sceneTools } from './tools/scene_tools.js';
 import { editorTools } from './tools/editor_tools.js';
-import { aiScriptTemplateTool, updateNodeTransformTool } from './resources/ai_script_tools.js';
 import { getGodotConnection } from './utils/godot_connection.js';
 
 // Import resources
@@ -15,9 +14,7 @@ import {
 import { 
   scriptResource, 
   scriptListResource,
-  scriptMetadataResource,
-  dynamicScriptResource,
-  dynamicScriptWriteResource
+  scriptMetadataResource
 } from './resources/script_resources.js';
 import { 
   projectStructureResource,
@@ -49,9 +46,7 @@ async function main() {
     ...nodeTools, 
     ...scriptTools, 
     ...sceneTools, 
-    ...editorTools,
-    aiScriptTemplateTool,
-    updateNodeTransformTool
+    ...editorTools
   ];
   
   allTools.forEach(tool => {
@@ -74,11 +69,7 @@ async function main() {
   server.addResource(scriptMetadataResource);
   server.addResource(fullSceneTreeResource);
   server.addResource(debugOutputResource);
-  
-  // Dynamic resources
-  server.addResourceTemplate(dynamicScriptResource);
-  server.addResourceTemplate(dynamicScriptWriteResource);
-  server.addResourceTemplate(assetListResource);
+  server.addResource(assetListResource);
 
   console.error('All resources and tools registered');
 

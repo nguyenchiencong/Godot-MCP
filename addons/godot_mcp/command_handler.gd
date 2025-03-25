@@ -25,26 +25,6 @@ func _initialize_command_processors():
 	var editor_commands = MCPEditorCommands.new()
 	var editor_script_commands = MCPEditorScriptCommands.new()
 	
-	# Ensure the optional command classes are loaded before trying to instantiate them
-	var script_resource_commands = null
-	if ClassDB.class_exists("MCPScriptResourceCommands") or ResourceLoader.exists("res://addons/godot_mcp/mcp_script_resource_commands.gd"):
-		script_resource_commands = MCPScriptResourceCommands.new()
-	else:
-		push_error("MCPScriptResourceCommands class not found")
-	
-	# Try to instantiate other custom classes 
-	var enhanced_commands = null
-	if ClassDB.class_exists("MCPEnhancedCommands"):
-		enhanced_commands = MCPEnhancedCommands.new()
-	else:
-		push_error("MCPEnhancedCommands class not found")
-		
-	var asset_commands = null
-	if ClassDB.class_exists("MCPAssetCommands"):
-		asset_commands = MCPAssetCommands.new()
-	else:
-		push_error("MCPAssetCommands class not found")
-	
 	# Set server reference for all processors
 	node_commands._websocket_server = _websocket_server
 	script_commands._websocket_server = _websocket_server
@@ -61,21 +41,10 @@ func _initialize_command_processors():
 	_command_processors.append(editor_commands)
 	_command_processors.append(editor_script_commands)
 	
-	# Set server reference and add optional processors if available
-	if script_resource_commands:
-		script_resource_commands._websocket_server = _websocket_server
-		_command_processors.append(script_resource_commands)
-		add_child(script_resource_commands)
-	
-	if enhanced_commands:
-		enhanced_commands._websocket_server = _websocket_server
-		_command_processors.append(enhanced_commands)
-		add_child(enhanced_commands)
-		
-	if asset_commands:
-		asset_commands._websocket_server = _websocket_server
-		_command_processors.append(asset_commands)
-		add_child(asset_commands)
+	# Try to load optional command classes
+	var script_resource_commands = _try_load_optional_command("res://addons/godot_mcp/mcp_script_resource_commands.gd")
+	var enhanced_commands = _try_load_optional_command("res://addons/godot_mcp/mcp_enhanced_commands.gd")
+	var asset_commands = _try_load_optional_command("res://addons/godot_mcp/mcp_asset_commands.gd")
 	
 	# Add required processors as children for proper lifecycle management
 	add_child(node_commands)
@@ -99,6 +68,18 @@ func _initialize_command_processors():
 		print("- Enhanced Commands")
 	if asset_commands:
 		print("- Asset Commands")
+
+func _try_load_optional_command(path: String) -> Node:
+	if FileAccess.file_exists(path):
+		var script = load(path)
+		if script:
+			var command = Node.new()
+			command.set_script(script)
+			command._websocket_server = _websocket_server
+			_command_processors.append(command)
+			add_child(command)
+			return command
+	return null
 
 func _handle_command(client_id: int, command: Dictionary) -> void:
 	var command_type = command.get("type", "")

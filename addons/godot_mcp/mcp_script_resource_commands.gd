@@ -1,8 +1,6 @@
 @tool
 class_name MCPScriptResourceCommands
-extends Node
-
-var _websocket_server = null
+extends MCPBaseCommandProcessor
 
 func process_command(client_id: int, command_type: String, params: Dictionary, command_id: String) -> bool:
 	match command_type:
@@ -15,11 +13,7 @@ func process_command(client_id: int, command_type: String, params: Dictionary, c
 		"ai_generate_script":
 			_handle_ai_generate_script(client_id, params, command_id)
 			return true
-	
-	# Command not handled by this processor
-	return false
-
-# ---- Script Content Retrieval ----
+	return false  # Command not handled
 
 func _handle_get_script(client_id: int, params: Dictionary, command_id: String) -> void:
 	var path = params.get("path", "")
@@ -41,15 +35,7 @@ func _handle_get_script(client_id: int, params: Dictionary, command_id: String) 
 			"script_found": false
 		}
 	
-	var response = {
-		"status": "success",
-		"result": result
-	}
-	
-	if not command_id.is_empty():
-		response["commandId"] = command_id
-	
-	_websocket_server.send_response(client_id, response)
+	_send_success(client_id, result, command_id)
 
 func _get_script_by_path(script_path: String) -> Dictionary:
 	if not FileAccess.file_exists(script_path):
@@ -105,11 +91,7 @@ func _get_script_by_node(node_path: String) -> Dictionary:
 		}
 	
 	var script_path = script.resource_path
-	
-	# Now get the content
 	return _get_script_by_path(script_path)
-
-# ---- Script Editing ----
 
 func _handle_edit_script(client_id: int, params: Dictionary, command_id: String) -> void:
 	var script_path = params.get("script_path", "")
@@ -130,15 +112,7 @@ func _handle_edit_script(client_id: int, params: Dictionary, command_id: String)
 	else:
 		result = _edit_script_content(script_path, content)
 	
-	var response = {
-		"status": "success",
-		"result": result
-	}
-	
-	if not command_id.is_empty():
-		response["commandId"] = command_id
-	
-	_websocket_server.send_response(client_id, response)
+	_send_success(client_id, result, command_id)
 
 func _edit_script_content(script_path: String, content: String) -> Dictionary:
 	# Make sure the path starts with res://
@@ -170,8 +144,6 @@ func _edit_script_content(script_path: String, content: String) -> Dictionary:
 		"success": true,
 		"script_path": script_path
 	}
-
-# ---- AI Script Generation ----
 
 func _handle_ai_generate_script(client_id: int, params: Dictionary, command_id: String) -> void:
 	var description = params.get("description", "")
@@ -207,20 +179,9 @@ func _handle_ai_generate_script(client_id: int, params: Dictionary, command_id: 
 				"success": true,
 				"content": script_content
 			}
-	}
 	
-	# Send response back to client
-	var response = {
-		"status": "success",
-		"result": result
-	}
-	
-	if not command_id.is_empty():
-		response["commandId"] = command_id
-	
-	_websocket_server.send_response(client_id, response)
+	_send_success(client_id, result, command_id)
 
-# Generate a script based on description
 func _generate_script_from_description(description: String, node_type: String) -> String:
 	# Create an intelligently structured script based on the description
 	# This uses heuristics to generate a template - no external API needed
@@ -301,7 +262,6 @@ func _generate_script_from_description(description: String, node_type: String) -
 	
 	return template
 
-# Function to create a script file
 func _create_script_file(file_path: String, content: String) -> Dictionary:
 	# Make sure the path starts with res://
 	if not file_path.begins_with("res://"):
