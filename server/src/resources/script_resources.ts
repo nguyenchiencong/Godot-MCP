@@ -107,3 +107,71 @@ export const scriptMetadataResource: Resource = {
         }
     }
 };
+
+/**
+ * ResourceTemplate for getting any script by path
+ */
+export const dynamicScriptResource: ResourceTemplate = {
+  uriTemplate: 'godot/script/{path}',
+  nameTemplate: 'Script: {path}',
+  mimeType: 'text/plain',
+  schema: z.object({ 
+    path: z.string().describe('Path to the script (e.g. "res://scripts/player.gd")') 
+  }),
+  
+  async load({ path }) {
+    const godot = getGodotConnection();
+    
+    try {
+      // URL-decode the path parameter
+      const decodedPath = decodeURIComponent(path);
+      
+      const result = await godot.sendCommand('get_script', {
+        path: decodedPath
+      });
+      
+      return {
+        text: result.content,
+        metadata: {
+          path: result.script_path,
+          language: decodedPath.endsWith('.gd') ? 'gdscript' : 
+                  decodedPath.endsWith('.cs') ? 'csharp' : 'unknown'
+        }
+      };
+    } catch (error) {
+      console.error(`Error loading script '${path}':`, error);
+      throw error;
+    }
+  }
+};
+
+/**
+ * ResourceTemplate for writing to any script by path
+ */
+export const dynamicScriptWriteResource: ResourceTemplate = {
+  uriTemplate: 'godot/script/{path}/write',
+  nameTemplate: 'Write Script: {path}',
+  mimeType: 'text/plain',
+  schema: z.object({ 
+    path: z.string().describe('Path to the script (e.g. "res://scripts/player.gd")') 
+  }),
+  
+  async write({ path }, content) {
+    const godot = getGodotConnection();
+    
+    try {
+      // URL-decode the path parameter
+      const decodedPath = decodeURIComponent(path);
+      
+      await godot.sendCommand('edit_script', {
+        script_path: decodedPath,
+        content
+      });
+      
+      return { success: true };
+    } catch (error) {
+      console.error(`Error writing script '${path}':`, error);
+      throw error;
+    }
+  }
+};

@@ -3,17 +3,21 @@ import { nodeTools } from './tools/node_tools.js';
 import { scriptTools } from './tools/script_tools.js';
 import { sceneTools } from './tools/scene_tools.js';
 import { editorTools } from './tools/editor_tools.js';
+import { aiScriptTemplateTool, updateNodeTransformTool } from './tools/ai_script_tools.js';
 import { getGodotConnection } from './utils/godot_connection.js';
 
 // Import resources
 import { 
   sceneListResource, 
-  sceneStructureResource 
+  sceneStructureResource,
+  fullSceneTreeResource
 } from './resources/scene_resources.js';
 import { 
   scriptResource, 
   scriptListResource,
-  scriptMetadataResource 
+  scriptMetadataResource,
+  dynamicScriptResource,
+  dynamicScriptWriteResource
 } from './resources/script_resources.js';
 import { 
   projectStructureResource,
@@ -25,21 +29,32 @@ import {
   selectedNodeResource,
   currentScriptResource 
 } from './resources/editor_resources.js';
+import { assetListResource } from './resources/asset_resources.js';
+import { debugOutputResource } from './resources/debug_resources.js';
 
 /**
  * Main entry point for the Godot MCP server
  */
 async function main() {
-  console.error('Starting Godot MCP server...');
+  console.error('Starting Enhanced Godot MCP server...');
 
   // Create FastMCP instance
   const server = new FastMCP({
-    name: 'GodotMCP',
-    version: '1.0.0',
+    name: 'EnhancedGodotMCP',
+    version: '1.1.0',
   });
 
   // Register all tools
-  [...nodeTools, ...scriptTools, ...sceneTools, ...editorTools].forEach(tool => {
+  const allTools = [
+    ...nodeTools, 
+    ...scriptTools, 
+    ...sceneTools, 
+    ...editorTools,
+    aiScriptTemplateTool,
+    updateNodeTransformTool
+  ];
+  
+  allTools.forEach(tool => {
     server.addTool(tool);
   });
 
@@ -56,6 +71,13 @@ async function main() {
   server.addResource(sceneStructureResource);
   server.addResource(scriptResource);
   server.addResource(scriptMetadataResource);
+  server.addResource(fullSceneTreeResource);
+  server.addResource(debugOutputResource);
+  
+  // Dynamic resources
+  server.addResourceTemplate(dynamicScriptResource);
+  server.addResourceTemplate(dynamicScriptWriteResource);
+  server.addResourceTemplate(assetListResource);
 
   // Try to connect to Godot
   try {
@@ -73,11 +95,11 @@ async function main() {
     transportType: 'stdio',
   });
 
-  console.error('Godot MCP server started');
+  console.error('Enhanced Godot MCP server started');
 
   // Handle cleanup
   const cleanup = () => {
-    console.error('Shutting down Godot MCP server...');
+    console.error('Shutting down Enhanced Godot MCP server...');
     const godot = getGodotConnection();
     godot.disconnect();
     process.exit(0);
@@ -89,6 +111,6 @@ async function main() {
 
 // Start the server
 main().catch(error => {
-  console.error('Failed to start Godot MCP server:', error);
+  console.error('Failed to start Enhanced Godot MCP server:', error);
   process.exit(1);
 });

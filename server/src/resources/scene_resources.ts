@@ -63,3 +63,27 @@ export const sceneStructureResource: Resource = {
         }
     }
 };
+
+/**
+ * Resource that provides the complete scene tree hierarchy
+ */
+export const fullSceneTreeResource: Resource = {
+  uri: 'godot/scene/tree',
+  name: 'Full Scene Tree',
+  mimeType: 'application/json',
+  async load() {
+    const godot = getGodotConnection();
+    
+    try {
+      // Call a command on the Godot side to get the full scene tree
+      const result = await godot.sendCommand('get_full_scene_tree');
+      
+      return {
+        text: JSON.stringify(result)
+      };
+    } catch (error) {
+      console.error('Error fetching full scene tree:', error);
+      throw error;
+    }
+  }
+};
