@@ -30,8 +30,8 @@ This fork adds several significant improvements:
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/your-username/enhanced-godot-mcp.git
-cd enhanced-godot-mcp
+git clone https://github.com/waefrebeorn/Godot-MCP.git
+cd Godot-MCP
 ```
 
 ### 2. Set Up the MCP Server
@@ -50,6 +50,8 @@ cd ..
    ```bash
    # For macOS
    nano ~/Library/Application\ Support/Claude/claude_desktop_config.json
+   # For Windows (PowerShell)
+   notepad "$env:APPDATA\Claude\claude_desktop_config.json"
    ```
 
 2. Add the following configuration (or use the included `claude_desktop_config.json` as a reference):
@@ -216,7 +218,7 @@ This fork adds several new files to the original project:
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome! Please feel free to submit a Pull Request to the [GitHub repository](https://github.com/waefrebeorn/Godot-MCP).
 
 ## Documentation
 
