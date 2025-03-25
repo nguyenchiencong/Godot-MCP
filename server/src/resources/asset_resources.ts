@@ -3,9 +3,8 @@ import { getGodotConnection } from '../utils/godot_connection.js';
 
 type AssetType = 'images' | 'audio' | 'fonts' | 'models' | 'shaders' | 'resources' | 'all';
 
-interface AssetMap {
-  [key in AssetType]: string[];
-}
+// Fix: Using Record type instead of a mapped type in interface
+type AssetMap = Record<AssetType, string[]>;
 
 const extensionMap: AssetMap = {
   images: ['.png', '.jpg', '.jpeg', '.webp', '.svg', '.bmp', '.tga'],
