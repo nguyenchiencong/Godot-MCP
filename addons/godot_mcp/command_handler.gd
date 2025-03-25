@@ -17,7 +17,7 @@ func _ready():
 	print("Command handler initialized and ready to process commands")
 
 func _initialize_command_processors():
-	# Create and add all command processors
+	# Create and add all required command processors
 	var node_commands = MCPNodeCommands.new()
 	var script_commands = MCPScriptCommands.new()
 	var scene_commands = MCPSceneCommands.new() 
@@ -25,10 +25,25 @@ func _initialize_command_processors():
 	var editor_commands = MCPEditorCommands.new()
 	var editor_script_commands = MCPEditorScriptCommands.new()
 	
-	# New enhanced processors
-	var enhanced_commands = MCPEnhancedCommands.new()
-	var script_resource_commands = MCPScriptResourceCommands.new()
-	var asset_commands = MCPAssetCommands.new()
+	# Ensure the optional command classes are loaded before trying to instantiate them
+	var script_resource_commands = null
+	if ClassDB.class_exists("MCPScriptResourceCommands") or ResourceLoader.exists("res://addons/godot_mcp/mcp_script_resource_commands.gd"):
+		script_resource_commands = MCPScriptResourceCommands.new()
+	else:
+		push_error("MCPScriptResourceCommands class not found")
+	
+	# Try to instantiate other custom classes 
+	var enhanced_commands = null
+	if ClassDB.class_exists("MCPEnhancedCommands"):
+		enhanced_commands = MCPEnhancedCommands.new()
+	else:
+		push_error("MCPEnhancedCommands class not found")
+		
+	var asset_commands = null
+	if ClassDB.class_exists("MCPAssetCommands"):
+		asset_commands = MCPAssetCommands.new()
+	else:
+		push_error("MCPAssetCommands class not found")
 	
 	# Set server reference for all processors
 	node_commands._websocket_server = _websocket_server
@@ -38,11 +53,6 @@ func _initialize_command_processors():
 	editor_commands._websocket_server = _websocket_server
 	editor_script_commands._websocket_server = _websocket_server
 	
-	# Set server reference for new processors
-	enhanced_commands._websocket_server = _websocket_server
-	script_resource_commands._websocket_server = _websocket_server
-	asset_commands._websocket_server = _websocket_server
-	
 	# Add them to our processor list
 	_command_processors.append(node_commands)
 	_command_processors.append(script_commands)
@@ -51,12 +61,23 @@ func _initialize_command_processors():
 	_command_processors.append(editor_commands)
 	_command_processors.append(editor_script_commands)
 	
-	# Add new processors to list
-	_command_processors.append(enhanced_commands)
-	_command_processors.append(script_resource_commands)
-	_command_processors.append(asset_commands)
+	# Set server reference and add optional processors if available
+	if script_resource_commands:
+		script_resource_commands._websocket_server = _websocket_server
+		_command_processors.append(script_resource_commands)
+		add_child(script_resource_commands)
 	
-	# Add them as children for proper lifecycle management
+	if enhanced_commands:
+		enhanced_commands._websocket_server = _websocket_server
+		_command_processors.append(enhanced_commands)
+		add_child(enhanced_commands)
+		
+	if asset_commands:
+		asset_commands._websocket_server = _websocket_server
+		_command_processors.append(asset_commands)
+		add_child(asset_commands)
+	
+	# Add required processors as children for proper lifecycle management
 	add_child(node_commands)
 	add_child(script_commands)
 	add_child(scene_commands)
@@ -64,21 +85,20 @@ func _initialize_command_processors():
 	add_child(editor_commands)
 	add_child(editor_script_commands)
 	
-	# Add new processors as children
-	add_child(enhanced_commands)
-	add_child(script_resource_commands)
-	add_child(asset_commands)
-	
 	print("Command processors initialized:")
 	print("- Node Commands")
 	print("- Script Commands")
 	print("- Scene Commands")
-	print("- Project Commands")
+	print("- Project Commands") 
 	print("- Editor Commands")
 	print("- Editor Script Commands")
-	print("- Enhanced Commands")
-	print("- Script Resource Commands")
-	print("- Asset Commands")
+	
+	if script_resource_commands:
+		print("- Script Resource Commands")
+	if enhanced_commands:
+		print("- Enhanced Commands")
+	if asset_commands:
+		print("- Asset Commands")
 
 func _handle_command(client_id: int, command: Dictionary) -> void:
 	var command_type = command.get("type", "")
