@@ -74,6 +74,49 @@ func _get_editor_node(path: String) -> Node:
 	# Try to find node as child of edited scene root
 	return edited_scene_root.get_node_or_null(path)
 
+# Enhanced version of _get_editor_node to improve node path resolution
+func _get_editor_node_enhanced(path: String) -> Node:
+	# First try the standard method
+	var node = _get_editor_node(path)
+	if node:
+		return node
+		
+	# If not found, try additional resolution methods
+	var plugin = Engine.get_meta("GodotMCPPlugin")
+	if not plugin:
+		return null
+		
+	var editor_interface = plugin.get_editor_interface()
+	var edited_scene_root = editor_interface.get_edited_scene_root()
+	
+	if not edited_scene_root:
+		return null
+	
+	# Special case for main scene nodes with common names
+	if path == "/root/Game" or path == "/root/game" or path == "/root/Main" or path == "/root/main":
+		var node_name = path.get_file().to_lower()
+		if edited_scene_root.name.to_lower() == node_name:
+			return edited_scene_root
+		
+		# Try to find the node as a child of root if it's not the root itself
+		for child in edited_scene_root.get_children():
+			if child.name.to_lower() == node_name:
+				return child
+	
+	# Try case-insensitive match for first level children
+	var simplified_path = path
+	if path.begins_with("/root/"):
+		simplified_path = path.substr(6)  # Remove "/root/"
+	elif path.begins_with("/"):
+		simplified_path = path.substr(1)  # Remove leading "/"
+		
+	if simplified_path.find("/") == -1:
+		for child in edited_scene_root.get_children():
+			if child.name.to_lower() == simplified_path.to_lower():
+				return child
+	
+	return null
+
 # Helper function to mark a scene as modified
 func _mark_scene_modified() -> void:
 	var plugin = Engine.get_meta("GodotMCPPlugin")

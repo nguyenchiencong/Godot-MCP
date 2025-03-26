@@ -24,6 +24,41 @@ func process_command(client_id: int, command_type: String, params: Dictionary, c
 			return true
 	return false  # Command not handled
 
+# Add this function to help find script files
+func _find_script_file(script_name: String) -> String:
+	# First, normalize the path
+	var script_path = script_name
+	
+	# Add extension if missing
+	if not script_path.ends_with(".gd") and not script_path.ends_with(".cs"):
+		script_path += ".gd"  # Default to GDScript
+	
+	# If path already contains res://, use it directly
+	if script_path.begins_with("res://"):
+		if FileAccess.file_exists(script_path):
+			return script_path
+	else:
+		# Add res:// prefix if missing
+		script_path = "res://" + script_path
+		if FileAccess.file_exists(script_path):
+			return script_path
+	
+	# If not found directly, try common script locations
+	var file_name = script_path.get_file()
+	var common_dirs = [
+		"res://scripts/",
+		"res://",
+		"res://scenes/",
+		"res://addons/"
+	]
+	
+	for dir in common_dirs:
+		var test_path = dir + file_name
+		if FileAccess.file_exists(test_path):
+			return test_path
+	
+	return ""  # Not found
+
 func _create_script(client_id: int, params: Dictionary, command_id: String) -> void:
 	var script_path = params.get("script_path", "")
 	var content = params.get("content", "")
@@ -70,7 +105,10 @@ func _create_script(client_id: int, params: Dictionary, command_id: String) -> v
 	if not node_path.is_empty():
 		var node = _get_editor_node(node_path)
 		if not node:
-			return _send_error(client_id, "Node not found: %s" % node_path, command_id)
+			# Try enhanced node resolution
+			node = _get_editor_node_enhanced(node_path)
+			if not node:
+				return _send_error(client_id, "Node not found: %s" % node_path, command_id)
 		
 		# Wait for script to be recognized in the filesystem
 		await get_tree().create_timer(0.5).timeout
@@ -120,9 +158,13 @@ func _edit_script(client_id: int, params: Dictionary, command_id: String) -> voi
 	if not script_path.begins_with("res://"):
 		script_path = "res://" + script_path
 	
-	# Check if the file exists
+	# Try to find the script if not found directly
 	if not FileAccess.file_exists(script_path):
-		return _send_error(client_id, "Script file not found: %s" % script_path, command_id)
+		var found_path = _find_script_file(script_path)
+		if not found_path.is_empty():
+			script_path = found_path
+		else:
+			return _send_error(client_id, "Script file not found: %s" % script_path, command_id)
 	
 	# Edit the script file
 	var file = FileAccess.open(script_path, FileAccess.WRITE)
@@ -148,21 +190,42 @@ func _get_script(client_id: int, params: Dictionary, command_id: String) -> void
 	if not node_path.is_empty():
 		var node = _get_editor_node(node_path)
 		if not node:
-			return _send_error(client_id, "Node not found: %s" % node_path, command_id)
+			# Try enhanced node resolution
+			node = _get_editor_node_enhanced(node_path)
+			if not node:
+				return _send_error(client_id, "Node not found: %s" % node_path, command_id)
 		
 		var script = node.get_script()
 		if not script:
 			return _send_error(client_id, "Node does not have a script: %s" % node_path, command_id)
 		
-		script_path = script.resource_path
+		# Handle various script types safely
+		if typeof(script) == TYPE_OBJECT and "resource_path" in script:
+			script_path = script.resource_path
+		elif typeof(script) == TYPE_STRING:
+			script_path = script
+		else:
+			# Try to handle other script types gracefully
+			print("Script type is not directly supported: ", typeof(script))
+			if script.has_method("get_path"):
+				script_path = script.get_path()
+			elif script.has_method("get_source_code"):
+				# Return the script content directly
+				_send_success(client_id, {
+					"script_path": node_path + " (embedded script)",
+					"content": script.get_source_code()
+				}, command_id)
+				return
+			else:
+				return _send_error(client_id, "Cannot extract script path from node: %s" % node_path, command_id)
 	
-	# Make sure we have an absolute path
-	if not script_path.begins_with("res://"):
-		script_path = "res://" + script_path
-	
-	# Check if the file exists
+	# Try to find the script if it's not found directly
 	if not FileAccess.file_exists(script_path):
-		return _send_error(client_id, "Script file not found: %s" % script_path, command_id)
+		var found_path = _find_script_file(script_path)
+		if not found_path.is_empty():
+			script_path = found_path
+		else:
+			return _send_error(client_id, "Script file not found: %s" % script_path, command_id)
 	
 	# Read the script file
 	var file = FileAccess.open(script_path, FileAccess.READ)
@@ -187,8 +250,13 @@ func _get_script_metadata(client_id: int, params: Dictionary, command_id: String
 	if not path.begins_with("res://"):
 		path = "res://" + path
 	
+	# Try to find the script if it's not found directly
 	if not FileAccess.file_exists(path):
-		return _send_error(client_id, "Script file not found: " + path, command_id)
+		var found_path = _find_script_file(path)
+		if not found_path.is_empty():
+			path = found_path
+		else:
+			return _send_error(client_id, "Script file not found: " + path, command_id)
 	
 	# Load the script
 	var script = load(path)

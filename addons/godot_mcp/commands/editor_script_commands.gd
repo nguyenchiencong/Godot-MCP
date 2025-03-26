@@ -9,12 +9,31 @@ func process_command(client_id: int, command_type: String, params: Dictionary, c
 			return true
 	return false  # Command not handled
 
+# Add API compatibility fixing function
+func _fix_api_compatibility(code: String) -> String:
+	var modified_code = code
+	
+	# Handle Directory API (replaced with DirAccess in Godot 4.x)
+	if "Directory.new()" in modified_code:
+		modified_code = modified_code.replace("Directory.new()", "DirAccess.open('res://')")
+		modified_code = modified_code.replace("dir.list_dir_begin(true, true)", "dir.list_dir_begin()")
+	
+	# Handle File API (replaced with FileAccess in Godot 4.x)
+	if "File.new()" in modified_code:
+		modified_code = modified_code.replace("File.new()", "FileAccess.open('res://', FileAccess.READ)")
+		modified_code = modified_code.replace("file.open(", "file = FileAccess.open(")
+	
+	return modified_code
+
 func _execute_editor_script(client_id: int, params: Dictionary, command_id: String) -> void:
 	var code = params.get("code", "")
 	
 	# Validation
 	if code.is_empty():
 		return _send_error(client_id, "Code cannot be empty", command_id)
+	
+	# Fix common API incompatibilities
+	code = _fix_api_compatibility(code)
 	
 	# Create a temporary script node to execute the code
 	var script_node := Node.new()
