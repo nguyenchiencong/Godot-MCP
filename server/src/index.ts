@@ -1,8 +1,12 @@
+// File: /server/src/index.ts
 import { FastMCP } from 'fastmcp';
 import { nodeTools } from './tools/node_tools.js';
 import { scriptTools } from './tools/script_tools.js';
 import { sceneTools } from './tools/scene_tools.js';
 import { editorTools } from './tools/editor_tools.js';
+import { assetTools } from './tools/asset_tools.js';
+import { enhancedTools } from './tools/enhanced_tools.js';
+import { scriptResourceTools } from './tools/script_resource_tools.js';
 import { getGodotConnection } from './utils/godot_connection.js';
 
 // Import resources
@@ -46,7 +50,10 @@ async function main() {
     ...nodeTools, 
     ...scriptTools, 
     ...sceneTools, 
-    ...editorTools
+    ...editorTools,
+    ...assetTools,
+    ...enhancedTools,
+    ...scriptResourceTools
   ];
   
   allTools.forEach(tool => {
@@ -55,7 +62,6 @@ async function main() {
   });
 
   // Register all resources
-  // Static resources
   server.addResource(sceneListResource);
   server.addResource(scriptListResource);
   server.addResource(projectStructureResource);

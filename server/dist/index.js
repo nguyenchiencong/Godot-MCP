@@ -43,11 +43,15 @@ var __spreadArray = (this && this.__spreadArray) || function (to, from, pack) {
     }
     return to.concat(ar || Array.prototype.slice.call(from));
 };
+// File: /server/src/index.ts
 import { FastMCP } from 'fastmcp';
 import { nodeTools } from './tools/node_tools.js';
 import { scriptTools } from './tools/script_tools.js';
 import { sceneTools } from './tools/scene_tools.js';
 import { editorTools } from './tools/editor_tools.js';
+import { assetTools } from './tools/asset_tools.js';
+import { enhancedTools } from './tools/enhanced_tools.js';
+import { scriptResourceTools } from './tools/script_resource_tools.js';
 import { getGodotConnection } from './utils/godot_connection.js';
 // Import resources
 import { sceneListResource, sceneStructureResource, fullSceneTreeResource } from './resources/scene_resources.js';
@@ -70,13 +74,12 @@ function main() {
                         name: 'EnhancedGodotMCP',
                         version: '1.1.0',
                     });
-                    allTools = __spreadArray(__spreadArray(__spreadArray(__spreadArray([], nodeTools, true), scriptTools, true), sceneTools, true), editorTools, true);
+                    allTools = __spreadArray(__spreadArray(__spreadArray(__spreadArray(__spreadArray(__spreadArray(__spreadArray([], nodeTools, true), scriptTools, true), sceneTools, true), editorTools, true), assetTools, true), enhancedTools, true), scriptResourceTools, true);
                     allTools.forEach(function (tool) {
                         server.addTool(tool);
                         console.error("Registered tool: ".concat(tool.name));
                     });
                     // Register all resources
-                    // Static resources
                     server.addResource(sceneListResource);
                     server.addResource(scriptListResource);
                     server.addResource(projectStructureResource);

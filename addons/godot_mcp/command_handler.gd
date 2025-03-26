@@ -88,6 +88,16 @@ func _handle_command(client_id: int, command: Dictionary) -> void:
 	
 	print("Processing command: %s" % command_type)
 	
+	# Special handling for enhanced commands
+	var enhanced_commands = ["get_full_scene_tree", "get_debug_output", "update_node_transform", "get_current_scene_structure"]
+	if command_type in enhanced_commands:
+		# Try to find enhanced commands processor first
+		for processor in _command_processors:
+			if processor.get_script() and processor.get_script().resource_path.ends_with("mcp_enhanced_commands.gd"):
+				if processor.process_command(client_id, command_type, params, command_id):
+					print("Command %s handled by Enhanced Commands processor" % command_type)
+					return
+	
 	# Try each processor until one handles the command
 	for processor in _command_processors:
 		if processor.process_command(client_id, command_type, params, command_id):

@@ -67,9 +67,20 @@ func _walk_node(node):
 	# Get script information if available
 	var script = node.get_script()
 	if script:
+		# Fix: Use safe access for script properties
+		var script_path = ""
+		var class_name_str = ""
+		
+		if typeof(script) == TYPE_OBJECT:
+			if script.has_method("get_path") or "resource_path" in script:
+				script_path = script.resource_path if "resource_path" in script else ""
+			
+			if script.has_method("get_instance_base_type"):
+				class_name_str = script.get_instance_base_type()
+		
 		info["script"] = {
-			"path": script.resource_path,
-			"class_name": script.get_instance_base_type()
+			"path": script_path,
+			"class_name": class_name_str
 		}
 	
 	# Recurse for children
@@ -94,7 +105,16 @@ func get_current_scene_structure() -> Dictionary:
 	if not root:
 		return { "error": "No scene is currently being edited" }
 	
-	var scene_path = root.scene_file_path
+	# Fix: Safely handle scene_file_path
+	var scene_path = ""
+	
+	# Use direct property access with safety checks
+	if "scene_file_path" in root:
+		scene_path = root.scene_file_path
+		# Additional check to ensure it's a valid string
+		if typeof(scene_path) != TYPE_STRING:
+			scene_path = str(scene_path)  # Convert to string
+	
 	if scene_path.is_empty():
 		scene_path = "Unsaved Scene"
 	
