@@ -3,6 +3,13 @@
 .import/
 export.cfg
 export_presets.cfg
+scripts/
+shaders/
+scenes/
+shapes/
+collision/
+environment/
+materials/
 
 # Imported translations (automatically generated from CSV files)
 *.translation
