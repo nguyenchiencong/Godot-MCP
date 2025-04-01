@@ -58,7 +58,7 @@ The addon supports the following commands:
   {
     "type": "create_node",
     "params": {
-      "parent_path": "/root",
+      "parent_path": ".",
       "node_type": "Sprite2D",
       "node_name": "NewSprite"
     }
@@ -70,7 +70,7 @@ The addon supports the following commands:
   {
     "type": "delete_node",
     "params": {
-      "node_path": "/root/NewSprite"
+      "node_path": "./NewSprite"
     }
   }
   ```
@@ -80,7 +80,7 @@ The addon supports the following commands:
   {
     "type": "update_node",
     "params": {
-      "node_path": "/root/NewSprite",
+      "node_path": "./NewSprite",
       "properties": {
         "position": [100, 100],
         "scale": [2, 2]
@@ -94,7 +94,7 @@ The addon supports the following commands:
   {
     "type": "list_nodes",
     "params": {
-      "parent_path": "/root",
+      "parent_path": ".",
       "recursive": true
     }
   }
@@ -109,7 +109,7 @@ The addon supports the following commands:
     "params": {
       "script_path": "res://scripts/new_script.gd",
       "content": "extends Node\n\nfunc _ready():\n\tpass",
-      "node_path": "/root/NewNode"  // Optional, attach to node
+      "node_path": "./NewNode"  // Optional, attach to node
     }
   }
   ```

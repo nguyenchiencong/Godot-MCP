@@ -8,7 +8,7 @@ This document provides a reference for the commands available through the Godot 
 Create a new node in the Godot scene tree.
 
 **Parameters:**
-- `parent_path` - Path to the parent node (e.g., "/root", "/root/MainScene")
+- `parent_path` - Path to the parent node (e.g., ".", "./MainScene")
 - `node_type` - Type of node to create (e.g., "Node2D", "Sprite2D", "Label")
 - `node_name` - Name for the new node
 
@@ -25,7 +25,7 @@ Delete a node from the scene tree.
 
 **Example:**
 ```
-Delete the node at "/root/MainScene/UI/OldButton".
+Delete the node at "./MainScene/UI/OldButton".
 ```
 
 ### update_node_property
@@ -38,7 +38,7 @@ Update a property of a node.
 
 **Example:**
 ```
-Update the "text" property of the node at "/root/MainScene/UI/Label" to "Game Over".
+Update the "text" property of the node at "./MainScene/UI/Label" to "Game Over".
 ```
 
 ### get_node_properties
@@ -49,7 +49,7 @@ Get all properties of a node.
 
 **Example:**
 ```
-Show me all the properties of the node at "/root/MainScene/Player".
+Show me all the properties of the node at "./MainScene/Player".
 ```
 
 ### list_nodes
@@ -60,7 +60,7 @@ List all child nodes under a parent node.
 
 **Example:**
 ```
-List all nodes under "/root/MainScene/UI".
+List all nodes under "./MainScene/UI".
 ```
 
 ## Script Tools
@@ -99,7 +99,7 @@ Get the content of a GDScript file.
 
 **Example:**
 ```
-Show me the script attached to the node at "/root/MainScene/Player".
+Show me the script attached to the node at "./MainScene/Player".
 ```
 
 ### create_script_template

@@ -18,10 +18,10 @@ export const aiScriptTemplateTool: MCPTool = {
     file_path: z.string().optional()
       .describe('Path where to save the script (only used if create_file is true)'),
   }),
-  
+
   execute: async ({ description, node_type = "Node", create_file = false, file_path = "" }): Promise<string> => {
     const godot = getGodotConnection();
-    
+
     try {
       // Using the MCP command that's already defined in the Godot plugin
       const result = await godot.sendCommand('ai_generate_script', {
@@ -30,11 +30,11 @@ export const aiScriptTemplateTool: MCPTool = {
         create_file,
         file_path
       });
-      
+
       if (create_file && file_path && result.success) {
         return `Generated script based on "${description}" and saved to ${file_path}:\n\n\`\`\`gdscript\n${result.content}\n\`\`\``;
       }
-      
+
       return `Generated script based on "${description}":\n\n\`\`\`gdscript\n${result.content}\n\`\`\``;
     } catch (error) {
       throw new Error(`Failed to generate script: ${(error as Error).message}`);
@@ -50,7 +50,7 @@ export const updateNodeTransformTool: MCPTool = {
   description: 'Update position, rotation, or scale of a node',
   parameters: z.object({
     node_path: z.string()
-      .describe('Path to the node to update (e.g. "/root/MainScene/Player")'),
+      .describe('Path to the node to update (e.g. "./MainScene/Player")'),
     position: z.tuple([z.number(), z.number()]).optional()
       .describe('New position as [x, y]'),
     rotation: z.number().optional()
@@ -58,10 +58,10 @@ export const updateNodeTransformTool: MCPTool = {
     scale: z.tuple([z.number(), z.number()]).optional()
       .describe('New scale as [x, y]'),
   }),
-  
+
   execute: async ({ node_path, position, rotation, scale }): Promise<string> => {
     const godot = getGodotConnection();
-    
+
     try {
       const result = await godot.sendCommand('update_node_transform', {
         node_path,
@@ -69,12 +69,12 @@ export const updateNodeTransformTool: MCPTool = {
         rotation,
         scale
       });
-      
+
       let changeDescription = [];
       if (position) changeDescription.push(`position to (${position[0]}, ${position[1]})`);
       if (rotation !== undefined) changeDescription.push(`rotation to ${rotation.toFixed(2)} rad`);
       if (scale) changeDescription.push(`scale to (${scale[0]}, ${scale[1]})`);
-      
+
       return `Updated ${changeDescription.join(', ')} for node at ${node_path}`;
     } catch (error) {
       throw new Error(`Failed to update node transform: ${(error as Error).message}`);
