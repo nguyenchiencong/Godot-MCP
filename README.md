@@ -44,18 +44,11 @@ npm run build
 cd ..
 ```
 
-### 3. Set Up Claude Desktop
+### 3. Set Up Coding Assistant
 
-1. Edit or create the Claude Desktop config file:
-   ```bash
-   # For macOS
-   nano ~/Library/Application\ Support/Claude/claude_desktop_config.json
-   # For Windows (PowerShell)
-   notepad "$env:APPDATA\Claude\claude_desktop_config.json"
-   ```
-
-2. Add the following configuration (or use the included `claude_desktop_config.json` as a reference):
+1. Add the following configuration (or use the included `mcp.json` as a reference):
    ```json
+   // STDIO
    {
      "mcpServers": {
        "godot-mcp": {
@@ -69,10 +62,20 @@ cd ..
        }
      }
    }
+   // SSE: don't forget to build the server accordingly and start with `npm start`
+  {
+    "mcpServers": {
+      "godot-mcp": {
+        "url": "http://localhost:8083/sse",
+        "disabled": false,
+        "alwaysAllow": []
+      }
+    }
+  }
    ```
    > **Note**: Replace `PATH_TO_YOUR_PROJECT` with the absolute path to where you have this repository stored.
 
-3. Restart Claude Desktop
+2. Restart the coding assistant
 
 ### 4. Open the Example Project in Godot
 
@@ -81,7 +84,7 @@ cd ..
 3. Open the `project.godot` file
 4. The MCP plugin is already enabled in this example project
 
-## Using MCP with Claude
+## Using MCP
 
 After setup, you can work with your Godot project directly from Claude using natural language. Here are some examples:
 

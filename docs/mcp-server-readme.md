@@ -42,10 +42,10 @@ Start the server using one of the following methods:
 #### CLI
 
 ```bash
-# Start with stdio transport (for Claude Desktop)
+# Start with stdio transport
 npm start
 
-# Start with SSE transport (for web-based Claude)
+# Start with SSE transport
 npm run start:sse
 ```
 
@@ -64,7 +64,7 @@ server.start({
   transportType: 'sse',
   sse: {
     endpoint: '/sse',
-    port: 8080
+    port: 8083 // or another port
   }
 });
 ```

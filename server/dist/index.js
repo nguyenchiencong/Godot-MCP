@@ -112,9 +112,18 @@ function main() {
                     return [3 /*break*/, 4];
                 case 4:
                     // Start the server
+                    // Start with stdio transport
                     server.start({
                         transportType: 'stdio',
                     });
+                    // Start with SSE transport
+                    // server.start({
+                    //   transportType: 'sse',
+                    //   sse: {
+                    //     endpoint: '/sse',
+                    //     port: 8083
+                    //   }
+                    // });
                     console.error('Enhanced Godot MCP server started');
                     console.error('Ready to process commands from Claude or other AI assistants');
                     cleanup = function () {

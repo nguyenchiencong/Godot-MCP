@@ -10,25 +10,25 @@ import { scriptResourceTools } from './tools/script_resource_tools.js';
 import { getGodotConnection } from './utils/godot_connection.js';
 
 // Import resources
-import { 
-  sceneListResource, 
+import {
+  sceneListResource,
   sceneStructureResource,
   fullSceneTreeResource
 } from './resources/scene_resources.js';
-import { 
-  scriptResource, 
+import {
+  scriptResource,
   scriptListResource,
   scriptMetadataResource
 } from './resources/script_resources.js';
-import { 
+import {
   projectStructureResource,
   projectSettingsResource,
-  projectResourcesResource 
+  projectResourcesResource
 } from './resources/project_resources.js';
-import { 
+import {
   editorStateResource,
   selectedNodeResource,
-  currentScriptResource 
+  currentScriptResource
 } from './resources/editor_resources.js';
 import { assetListResource } from './resources/asset_resources.js';
 import { debugOutputResource } from './resources/debug_resources.js';
@@ -47,15 +47,15 @@ async function main() {
 
   // Register all tools
   const allTools = [
-    ...nodeTools, 
-    ...scriptTools, 
-    ...sceneTools, 
+    ...nodeTools,
+    ...scriptTools,
+    ...sceneTools,
     ...editorTools,
     ...assetTools,
     ...enhancedTools,
     ...scriptResourceTools
   ];
-  
+
   allTools.forEach(tool => {
     server.addTool(tool);
     console.error(`Registered tool: ${tool.name}`);
@@ -91,9 +91,21 @@ async function main() {
   }
 
   // Start the server
+
+  // Start with stdio transport
   server.start({
     transportType: 'stdio',
   });
+
+  // Start with SSE transport
+  // server.start({
+  //   transportType: 'sse',
+  //   sse: {
+  //     endpoint: '/sse',
+  //     port: 8083
+  //   }
+  // });
+
 
   console.error('Enhanced Godot MCP server started');
   console.error('Ready to process commands from Claude or other AI assistants');
