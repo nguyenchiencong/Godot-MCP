@@ -47,33 +47,38 @@ cd ..
 ### 3. Set Up Coding Assistant
 
 1. Add the following configuration (or use the included `mcp.json` as a reference):
-   ```json
-   // STDIO
-   {
-     "mcpServers": {
-       "godot-mcp": {
-         "command": "node",
-         "args": [
-           "PATH_TO_YOUR_PROJECT/server/dist/index.js"
-         ],
-         "env": {
-           "MCP_TRANSPORT": "stdio"
-         }
-       }
-     }
-   }
-   // SSE: don't forget to build the server accordingly and start with `npm start`
-  {
-    "mcpServers": {
-      "godot-mcp": {
-        "url": "http://localhost:8083/sse",
-        "disabled": false,
-        "alwaysAllow": []
+
+For STDIO:
+```json
+{
+  "mcpServers": {
+    "godot-mcp": {
+      "command": "node",
+      "args": [
+        "PATH_TO_YOUR_PROJECT/server/dist/index.js"
+      ],
+      "env": {
+        "MCP_TRANSPORT": "stdio"
       }
     }
   }
-   ```
+}
+```
+
+For SSE: don't forget to build the server accordingly and start with npm start
+```json
+{
+"mcpServers": {
+  "godot-mcp": {
+    "url": "http://localhost:8083/sse",
+    "disabled": false,
+    "alwaysAllow": []
+  }
+}
+}
+```
    > **Note**: Replace `PATH_TO_YOUR_PROJECT` with the absolute path to where you have this repository stored.
+
 
 2. Restart the coding assistant
 
