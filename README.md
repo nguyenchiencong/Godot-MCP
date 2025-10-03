@@ -77,7 +77,7 @@ For SSE: don't forget to build the server accordingly and start with npm start
 }
 }
 ```
-   > **Note**: Replace `PATH_TO_YOUR_PROJECT` with the absolute path to where you have this repository stored.
+> **Note**: Replace `PATH_TO_YOUR_PROJECT` with the absolute path to where you have this repository stored.
 
 
 2. Restart the coding assistant
