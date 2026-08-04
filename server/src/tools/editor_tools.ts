@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { getGodotConnection } from '../utils/godot_connection.js';
-import { MCPTool, CommandResult } from '../utils/types.js';
+import { MCPTool, CommandResult, GetNodeWarningsParams, NodeWarningsCommandResult } from '../utils/types.js';
+import { formatNodeWarningsResult } from '../utils/node_warning_tools.js';
 
 interface ExecuteEditorScriptParams {
   code: string;
@@ -84,6 +85,30 @@ export const editorTools: MCPTool[] = [
         return `Scene reloaded from disk: ${reloadedPath}`;
       } catch (error) {
         throw new Error(`Failed to reload scene: ${(error as Error).message}`);
+      }
+    },
+  },
+
+  {
+    name: 'get_node_warnings',
+    description: 'Inspect the open scene tree for configuration warnings on each node',
+    parameters: z.object({
+      debug: z
+        .boolean()
+        .optional()
+        .describe('Include traversal stats in the output'),
+    }),
+    execute: async ({ debug }: GetNodeWarningsParams): Promise<string> => {
+      const godot = getGodotConnection();
+
+      try {
+        const result = await godot.sendCommand<NodeWarningsCommandResult>('get_node_warnings', {
+          debug: debug ?? false,
+        });
+
+        return formatNodeWarningsResult(result, debug ?? false);
+      } catch (error) {
+        throw new Error(`Failed to get node warnings: ${(error as Error).message}`);
       }
     },
   },

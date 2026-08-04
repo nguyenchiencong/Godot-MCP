@@ -102,6 +102,7 @@ Requires a running game (F5).
 | `clear_debug_output` | Clear Output panel | (none) |
 | `get_editor_errors` | Get Errors tab | (none) |
 | `clear_editor_errors` | Clear Errors tab | (none) |
+| `get_node_warnings` | Inspect current scene tree for configuration warnings | `--debug` |
 | `get_stack_trace_panel` | Get stack trace | `--session-id` |
 | `get_stack_frames_panel` | Get stack frames | `--session-id`, `--refresh` |
 | `stream_debug_output` | Start/stop log stream | `--action` (start/stop) |

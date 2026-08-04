@@ -59,6 +59,7 @@ Use this document to craft effective prompts when instructing an LLM to interact
 | Tool | Purpose | Parameters | Example Prompt |
 |------|---------|------------|----------------|
 | `execute_editor_script` | Run arbitrary GDScript inside the editor context. | `code` (string) | "Find all nodes in the `Enemies` group and print their names." |
+| `get_node_warnings` | Inspect the current scene for node configuration warnings. | `debug` (optional bool) | "Include traversal stats." |
 
 ---
 
@@ -163,4 +164,4 @@ Use this document to craft effective prompts when instructing an LLM to interact
 **Automated Game Testing**:
 > "Run the project, simulate pressing `ui_right` for 500ms to move the character, then tap `jump` to make them jump over the obstacle."
 
-Keep this guide handy while constructing system or user prompts so the LLM knows exactly which tools are available and how to use them. 
+Keep this guide handy while constructing system or user prompts so the LLM knows exactly which tools are available and how to use them.
