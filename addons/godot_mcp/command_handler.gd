@@ -4,6 +4,7 @@ extends Node
 
 var _websocket_server
 var _command_processors = []
+var _enhanced_processor = null
 
 func _ready():
 	print("Command handler initializing...")
@@ -57,6 +58,7 @@ func _initialize_command_processors():
 	var script_resource_commands = _try_load_optional_command("res://addons/godot_mcp/mcp_script_resource_commands.gd")
 	var enhanced_commands = _try_load_optional_command("res://addons/godot_mcp/mcp_enhanced_commands.gd")
 	var asset_commands = _try_load_optional_command("res://addons/godot_mcp/mcp_asset_commands.gd")
+	_enhanced_processor = enhanced_commands
 	
 	# Add required processors as children for proper lifecycle management
 	add_child(node_commands)
@@ -123,14 +125,13 @@ func _handle_command(client_id: int, command: Dictionary) -> void:
 		"unsubscribe_debug_output",
 		"update_node_transform"
 	]
-	if command_type in enhanced_commands:
-		# Try to find enhanced commands processor first
-		for processor in _command_processors:
-			if processor.get_script() and processor.get_script().resource_path.ends_with("mcp_enhanced_commands.gd"):
-				var handled = await _call_processor(processor, client_id, command_type, params, command_id)
-				if handled:
-					print("Command %s handled by Enhanced Commands processor" % command_type)
-					return
+	if command_type in enhanced_commands and _enhanced_processor != null:
+		# Dispatch straight to the cached enhanced processor instead of scanning
+		# the processor list for its script path on every enhanced command.
+		var handled = await _call_processor(_enhanced_processor, client_id, command_type, params, command_id)
+		if handled:
+			print("Command %s handled by Enhanced Commands processor" % command_type)
+			return
 	
 	# Try each processor until one handles the command
 	for processor in _command_processors:

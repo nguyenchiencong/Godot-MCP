@@ -75,10 +75,10 @@ func custom_print(values):
 	# Convert array of values to a single string
 	var output_str = ""
 	if values is Array:
+		var string_parts := PackedStringArray()
 		for i in range(values.size()):
-			if i > 0:
-				output_str += " "
-			output_str += str(values[i])
+			string_parts.append(str(values[i]))
+		output_str = " ".join(string_parts)
 	else:
 		output_str = str(values)
 		
@@ -133,9 +133,10 @@ func _execute_code():
 			
 		processed_lines.append(processed_line)
 	
-	var indented_code = ""
+	var indented_lines := PackedStringArray()
 	for line in processed_lines:
-		indented_code += "\t" + line + "\n"
+		indented_lines.append("\t" + line)
+	var indented_code := "\n".join(indented_lines) + "\n"
 	
 	script_content = script_content.replace("{user_code}", indented_code)
 	script.source_code = script_content
@@ -183,7 +184,7 @@ func _on_script_execution_completed(script_node: Node, client_id: int, command_i
 		"output": output
 	}
 
-	print("result_data: ", result_data)
+	print("Editor script execution result: success=%s" % result_data["success"])
 	
 	if not error_message.is_empty():
 		result_data["error"] = error_message
@@ -196,40 +197,40 @@ func _on_script_execution_completed(script_node: Node, client_id: int, command_i
 
 # Replace print() calls with custom_print() in the user code
 func _replace_print_calls(code: String) -> String:
-	var modified_code := ""
+	var parts := PackedStringArray()
 	var search_index := 0
 	
 	while search_index < code.length():
 		var match_index = code.find("print", search_index)
 		if match_index == -1:
-			modified_code += code.substr(search_index)
+			parts.append(code.substr(search_index))
 			break
 		
-		modified_code += code.substr(search_index, match_index - search_index)
+		parts.append(code.substr(search_index, match_index - search_index))
 		var prev_char = code.substr(match_index - 1, 1) if match_index > 0 else ""
 		var next_char = code.substr(match_index + 5, 1) if match_index + 5 < code.length() else ""
 		
 		if _is_identifier_char(prev_char) or _is_identifier_char(next_char):
-			modified_code += "print"
+			parts.append("print")
 			search_index = match_index + 5
 			continue
 		
 		var paren_index = _skip_whitespace(code, match_index + 5)
 		if paren_index >= code.length() or code[paren_index] != "(":
-			modified_code += "print"
+			parts.append("print")
 			search_index = match_index + 5
 			continue
 		
 		var closing_index = _find_matching_paren(code, paren_index)
 		if closing_index == -1:
-			modified_code += code.substr(match_index)
+			parts.append(code.substr(match_index))
 			break
 		
 		var inner_content = code.substr(paren_index + 1, closing_index - paren_index - 1)
-		modified_code += "custom_print([" + inner_content + "])"
+		parts.append("custom_print([" + inner_content + "])")
 		search_index = closing_index + 1
 	
-	return modified_code
+	return "".join(parts)
 
 func _skip_whitespace(text: String, start_index: int) -> int:
 	var index = start_index

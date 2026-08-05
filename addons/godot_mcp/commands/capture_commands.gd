@@ -5,7 +5,9 @@ extends MCPBaseCommandProcessor
 ## Command processor for capturing scene screenshots.
 ## Renders a scene into an off-screen SubViewport, saves a PNG file, and
 ## returns the image as base64 so the MCP server can deliver visual
-## feedback to vision-capable AI models.
+## feedback to vision-capable AI models. With return_base64=false (default)
+## the base64 payload is omitted entirely and the caller reads the PNG from
+## absolute_path instead, avoiding a multi-MB JSON round-trip.
 
 const DEFAULT_WIDTH := 1280
 const DEFAULT_HEIGHT := 720
@@ -27,6 +29,8 @@ func _handle_capture_scene(client_id: int, params: Dictionary, command_id: Strin
 	var height := int(params.get("height", DEFAULT_HEIGHT))
 	var transparent := bool(params.get("transparent", false))
 	var output_path := str(params.get("output_path", ""))
+	var return_base64 := bool(params.get("return_base64", false))
+	var allow_large := bool(params.get("allow_large", false))
 
 	if width <= 0 or height <= 0:
 		_send_error(client_id, "Width and height must be positive integers", command_id)
@@ -34,6 +38,11 @@ func _handle_capture_scene(client_id: int, params: Dictionary, command_id: Strin
 
 	width = mini(width, MAX_DIMENSION)
 	height = mini(height, MAX_DIMENSION)
+
+	# Guard against accidental huge captures; 4 megapixels is the default cap.
+	if width * height > 4000000 and not allow_large:
+		_send_error(client_id, "Capture size %dx%d exceeds the 4MP default limit; set allow_large=true to override" % [width, height], command_id)
+		return
 
 	# Resolve which scene to capture
 	if scene_path.is_empty():
@@ -99,15 +108,17 @@ func _handle_capture_scene(client_id: int, params: Dictionary, command_id: Strin
 	if not _write_png_bytes(bytes, save_path):
 		_send_error(client_id, "Failed to write PNG file: %s" % save_path, command_id)
 		return
-	var base64 := Marshalls.raw_to_base64(bytes)
 
-	_send_success(client_id, {
+	var result := {
 		"file_path": _to_project_path(save_path),
 		"absolute_path": ProjectSettings.globalize_path(save_path),
 		"width": width,
-		"height": height,
-		"image_base64": base64
-	}, command_id)
+		"height": height
+	}
+	if return_base64:
+		result["image_base64"] = Marshalls.raw_to_base64(bytes)
+
+	_send_success(client_id, result, command_id)
 
 
 # Returns the res:// path of the scene currently open in the editor,

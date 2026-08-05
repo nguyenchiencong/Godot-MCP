@@ -161,20 +161,24 @@ const toolCategories = {
 				get params() {
 					return { 
 						script_path: TEST_SCRIPT_PATH,
-						content: 'extends Node\n\nfunc _ready():\n\tpass\n'
+						// Deliberately invalid: exercises the auto-diagnostics error path
+						content: 'extends Node\n\nfunc _ready():\n\tvar value = \n',
+						diagnostics: true
 					};
 				},
-				validate: (result) => result.includes('Created') || result.includes('script')
+				validate: (result) => result.includes('Created') && result.includes('Diagnostics:') && result.includes('error')
 			},
 			{
 				tool: 'edit_script',
 				get params() {
 					return {
 						script_path: TEST_SCRIPT_PATH,
-						content: 'extends Node\n\nfunc _ready():\n\tprint("Hello MCP")\n'
+						// Valid content: recovery after the broken create above
+						content: 'extends Node\n\nfunc _ready():\n\tprint("Hello MCP")\n',
+						diagnostics: true
 					};
 				},
-				validate: (result) => result.includes('Updated') || result.includes('script'),
+				validate: (result) => result.includes('Updated') && result.includes('Diagnostics: valid'),
 				cleanup: async () => {
 					const tool = toolMap.get('execute_editor_script');
 					if (tool) {
@@ -287,6 +291,12 @@ print("Cleaned up test resource: ${resourcePath}")
 			{
 				tool: 'validate_scene',
 				params: { scene_path: 'res://test_main_scene.tscn' },
+				validate: (result) => result.includes('valid') && result.includes('0 issues')
+			},
+			{
+				tool: 'validate_scene',
+				// Optimized branch: skips PackedScene.instantiate, structural/dependency checks only
+				params: { scene_path: 'res://test_main_scene.tscn', check_instantiate: false },
 				validate: (result) => result.includes('valid') && result.includes('0 issues')
 			},
 			{

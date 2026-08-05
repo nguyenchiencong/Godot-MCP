@@ -24,6 +24,34 @@ extends MCPBaseCommandProcessor
 # This processor is synchronous: process_command never awaits, matching the
 # command handler's expectations for non-debugger processors.
 
+var _parse_error_regex := RegEx.new()
+var _parse_location_regex := RegEx.new()
+
+# Engine-metadata key for the shared subprocess diagnostics cache. GDScript
+# has no static class variables, so the cache lives process-wide in Engine
+# metadata (same pattern as ScriptUtils' regex cache).
+const SUBPROCESS_CACHE_META_KEY := "GodotMCPDiagnosticsSubprocessCache"
+
+# Cache of headless-subprocess diagnostic results keyed by
+# "path|content_digest". A hit avoids both the in-process parse (GDScript
+# reload) and re-spawning a headless Godot process for identical known-broken
+# content. Only known-invalid diagnostics are ever stored, so a hit always
+# means the script is invalid. Shared process-wide across explicit and auto
+# diagnostics. Single-threaded editor use, so no locking needed.
+var _subprocess_cache: Dictionary
+
+func _init() -> void:
+	_parse_error_regex.compile("^SCRIPT ERROR: Parse Error: (.*)$")
+	_parse_location_regex.compile("^\\s*at:\\s+\\S+\\s+\\((.+?):(\\d+)\\)$")
+	# Reuse the shared process-wide cache when it already exists, otherwise
+	# create it and publish it in Engine metadata for other instances.
+	if Engine.has_meta(SUBPROCESS_CACHE_META_KEY):
+		_subprocess_cache = Engine.get_meta(SUBPROCESS_CACHE_META_KEY)
+	else:
+		_subprocess_cache = {}
+		Engine.set_meta(SUBPROCESS_CACHE_META_KEY, _subprocess_cache)
+
+
 func process_command(client_id: int, command_type: String, params: Dictionary, command_id: String) -> bool:
 	match command_type:
 		"get_script_diagnostics":
@@ -49,7 +77,8 @@ func _validate_scene(client_id: int, params: Dictionary, command_id: String) -> 
 	if scene_path.is_empty():
 		return _send_error(client_id, "Scene path cannot be empty", command_id)
 
-	var result := validate_scene(scene_path)
+	var check_instantiate: bool = params.get("check_instantiate", true)
+	var result := validate_scene(scene_path, check_instantiate)
 	_send_success(client_id, result, command_id)
 
 
@@ -89,6 +118,14 @@ func diagnose_script(script_path: String) -> Dictionary:
 	var content := file.get_as_text()
 	file = null  # Close the file
 
+	# Check the shared cache before any parsing work: diagnostics for
+	# identical known-broken content are reused without re-running the
+	# in-process parse or the headless subprocess. The cache only stores
+	# known-invalid diagnostics, so a hit means the script is invalid.
+	var cache_key := "%s|%s" % [normalized, content.md5_text()]
+	if _subprocess_cache.has(cache_key):
+		return _build_diagnostics_result(normalized, true, false, _subprocess_cache[cache_key])
+
 	var script := GDScript.new()
 	script.source_code = content
 
@@ -100,17 +137,29 @@ func diagnose_script(script_path: String) -> Dictionary:
 	Engine.set_print_error_messages(was_printing_errors)
 
 	if reload_error == OK:
+		# Valid results are not cached; the cache only stores known-invalid
+		# diagnostics.
 		return _build_diagnostics_result(normalized, true, true, [])
 
 	# The in-process parse failed. Spawn a headless child parser to recover
-	# the actual error messages and line numbers.
-	var errors := _run_parser_subprocess(normalized)
+	# the actual error messages and line numbers. The cache was already
+	# checked above, so there is no second lookup here.
+	var errors: Array = _run_parser_subprocess(normalized)
 	if errors.is_empty():
 		errors = [{
 			"line": 0,
 			"column": 0,
 			"message": "Script failed to parse (error code %d)" % reload_error
 		}]
+	# Cache the final (non-empty) errors array. Bound the cache: broken edits
+	# produce unique keys (path|content_digest) without bound across a long
+	# session, so once it reaches 64 entries drop everything. A cached file
+	# that gets evicted simply re-runs the subprocess once on its next
+	# diagnostic, which keeps the common unchanged-file case fast without
+	# unbounded growth.
+	if _subprocess_cache.size() >= 64:
+		_subprocess_cache.clear()
+	_subprocess_cache[cache_key] = errors
 	return _build_diagnostics_result(normalized, true, false, errors)
 
 
@@ -125,7 +174,9 @@ func diagnose_script(script_path: String) -> Dictionary:
 #   }
 # Categories: "load", "instantiate", "duplicate_name", "missing_resource",
 # "cyclic_dependency".
-func validate_scene(scene_path: String) -> Dictionary:
+# check_instantiate=false skips the packed_scene.instantiate() tree-build check
+# (callers that only care about load/dependency health can opt out).
+func validate_scene(scene_path: String, check_instantiate: bool = true) -> Dictionary:
 	var normalized := scene_path.strip_edges()
 	if normalized.is_empty():
 		return _build_scene_result(normalized, false, [{
@@ -165,25 +216,28 @@ func validate_scene(scene_path: String) -> Dictionary:
 		})
 		return _build_scene_result(normalized, false, issues)
 
-	var scene_instance = packed_scene.instantiate()
-	if scene_instance == null:
-		issues.append({
-			"severity": "error",
-			"category": "instantiate",
-			"message": "Failed to instantiate scene: %s" % normalized
-		})
-	else:
-		# Note: instantiate() may silently drop duplicate-named siblings
-		# depending on resource cache state, so duplicate detection runs on
-		# the scene state (which always preserves every node) instead of on
-		# the instantiated tree.
-		scene_instance.queue_free()
+	if check_instantiate:
+		var scene_instance = packed_scene.instantiate()
+		if scene_instance == null:
+			issues.append({
+				"severity": "error",
+				"category": "instantiate",
+				"message": "Failed to instantiate scene: %s" % normalized
+			})
+		else:
+			# Note: instantiate() may silently drop duplicate-named siblings
+			# depending on resource cache state, so duplicate detection runs on
+			# the scene state (which always preserves every node) instead of on
+			# the instantiated tree.
+			scene_instance.queue_free()
 
+	# The root dependency list is computed once and shared by both checks.
+	var dependencies := ResourceLoader.get_dependencies(normalized)
 	var scene_state: SceneState = packed_scene.get_state()
 	_check_duplicate_names(scene_state, issues)
 	_check_missing_scripts(scene_state, issues)
-	_check_missing_resources(normalized, issues)
-	_check_cyclic_dependencies(normalized, issues)
+	_check_missing_resources(dependencies, issues)
+	_check_cyclic_dependencies(normalized, dependencies, issues)
 
 	return _build_scene_result(normalized, _has_no_errors(issues), issues)
 
@@ -242,15 +296,10 @@ func _run_parser_subprocess(script_path: String) -> Array:
 		"--script", script_path,
 	]), output, true)
 
+	# The clean child process parsed the script successfully, which means
+	# the in-process failure came from stale editor state.
 	if exit_code == 0:
-		# The clean child process parsed the script successfully, which means
-		# the in-process failure came from stale editor state.
 		return []
-
-	var message_regex := RegEx.new()
-	message_regex.compile("^SCRIPT ERROR: Parse Error: (.*)$")
-	var location_regex := RegEx.new()
-	location_regex.compile("^\\s*at:\\s+\\S+\\s+\\((.+?):(\\d+)\\)$")
 
 	# OS.execute appends the whole captured output as a single string with
 	# embedded newlines, so split it into lines (and strip Windows carriage
@@ -262,7 +311,7 @@ func _run_parser_subprocess(script_path: String) -> Array:
 
 	var errors: Array = []
 	for i in lines.size():
-		var message_match := message_regex.search(lines[i])
+		var message_match := _parse_error_regex.search(lines[i])
 		if message_match == null:
 			continue
 		var error_entry := {
@@ -273,7 +322,7 @@ func _run_parser_subprocess(script_path: String) -> Array:
 		# The location line ("at: ... (res://path.gd:LINE)") directly follows
 		# the message line; scan a few lines forward to find it.
 		for j in range(i + 1, mini(i + 4, lines.size())):
-			var location_match := location_regex.search(lines[j])
+			var location_match := _parse_location_regex.search(lines[j])
 			if location_match != null:
 				error_entry["line"] = int(location_match.get_string(2))
 				break
@@ -336,8 +385,7 @@ func _check_missing_scripts(state: SceneState, issues: Array) -> void:
 # scripts fail to parse, which is handled gracefully. Dependency entries may
 # be uid-prefixed (a uid:// reference glued to the path with "::::", or a bare
 # uid:// reference); those forms are resolved before the existence check.
-func _check_missing_resources(scene_path: String, issues: Array) -> void:
-	var dependencies := ResourceLoader.get_dependencies(scene_path)
+func _check_missing_resources(dependencies: Array, issues: Array) -> void:
 	for dependency in dependencies:
 		if not _resource_exists(dependency):
 			issues.append({
@@ -370,10 +418,18 @@ func _resource_exists(dependency: String) -> bool:
 # depth-first with a visited set and a recursion stack. Godot 4.5's text scene
 # parser rejects cycles (the referencing edge is dropped with a parse error),
 # so a cycle is a genuine structural error.
-func _check_cyclic_dependencies(scene_path: String, issues: Array) -> void:
+func _check_cyclic_dependencies(scene_path: String, dependencies: Array, issues: Array) -> void:
 	var visited := {}
-	var stack: Array = []
-	_check_cycle_from(scene_path, visited, stack, issues)
+	var stack: Array = [scene_path]
+	visited[scene_path] = true
+	for dependency in dependencies:
+		var clean := str(dependency)
+		var sep := clean.rfind("::::")
+		if sep != -1:
+			clean = clean.substr(sep + 4)
+		if clean.ends_with(".tscn"):
+			_check_cycle_from(clean, visited, stack, issues)
+	stack.pop_back()
 
 
 func _check_cycle_from(path: String, visited: Dictionary, stack: Array, issues: Array) -> void:

@@ -46,6 +46,7 @@ func _send_error(client_id: int, message: String, command_id: String) -> void:
 	# Send to websocket if available
 	if _websocket_server:
 		_websocket_server.send_response(client_id, response)
+
 	print("Error: %s" % message)
 
 # Common utility methods

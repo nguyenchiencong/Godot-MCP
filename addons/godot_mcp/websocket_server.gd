@@ -137,7 +137,11 @@ func _handle_packet(client_id: int, packet: PackedByteArray) -> void:
 			send_response(client_id, response)
 			return
 			
-		print("Received command from client %d: %s" % [client_id, data])
+		# Log only the routing fields, never the raw payload: params can contain
+		# multi-MB script content or base64 image data.
+		var command_type := str(data.get("type", "unknown"))
+		var command_id := str(data.get("commandId", ""))
+		print("Received command from client %d: type=%s commandId=%s" % [client_id, command_type, command_id])
 		emit_signal("command_received", client_id, data)
 	else:
 		print("Error parsing JSON from client %d: %s at line %d" % 

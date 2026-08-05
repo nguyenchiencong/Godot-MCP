@@ -17,8 +17,8 @@ Quick reference for all available tools. Use `godot-mcp --help <tool>` for detai
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
-| `create_script` | Create a GDScript | `--script-path`, `--content`, `--node-path` (optional) |
-| `edit_script` | Edit a script | `--script-path`, `--content` |
+| `create_script` | Create a GDScript | `--script-path`, `--content`, `--node-path` (optional), `--diagnostics` (optional) |
+| `edit_script` | Edit a script | `--script-path`, `--content`, `--diagnostics` (optional) |
 | `get_script` | Get script content | `--script-path` or `--node-path` |
 | `get_script_diagnostics` | Parse a GDScript file and return compile/parse errors | `--script-path` |
 
@@ -32,8 +32,8 @@ Quick reference for all available tools. Use `godot-mcp --help <tool>` for detai
 | `open_scene` | Open a scene | `--path` |
 | `get_current_scene` | Get current scene info | (none) |
 | `create_resource` | Create a resource | `--resource-type`, `--resource-path`, `--properties` |
-| `capture_scene` | Render a scene into an off-screen viewport and return the PNG image | `--scene-path` (optional), `--width`, `--height`, `--transparent`, `--output-path` |
-| `validate_scene` | Check a scene's structural health | `--scene-path` |
+| `capture_scene` | Render a scene into an off-screen viewport and return the PNG image | `--scene-path` (optional), `--width`, `--height`, `--transparent`, `--output-path`, `--return-base64` (optional), `--allow-large` (optional) |
+| `validate_scene` | Check a scene's structural health | `--scene-path`, `--check-instantiate` (optional) |
 
 ## Project Tools
 
@@ -199,6 +199,9 @@ Returns the captured PNG as an MCP image content block plus a text summary ("Sce
 
 Defaults: width 1280, height 720, transparent background off, output directory `user://mcp_captures/`. Without `--scene-path`, the scene currently open in the editor is captured.
 
+- `return_base64` (default false): when true, Godot sends the PNG as base64 over the WebSocket (included as `image_base64` in the command result). When false (the default), Godot only writes the PNG to disk and the server reads it back from `absolute_path`, avoiding multi-megabyte WebSocket payloads.
+- `allow_large` (default false): captures whose width x height exceeds 4,000,000 pixels are refused unless this is set to true.
+
 ### get_script_diagnostics
 
 ```json
@@ -213,7 +216,7 @@ Defaults: width 1280, height 720, transparent background off, output directory `
 }
 ```
 
-`valid` is true when the script parses without errors. `create_script` and `edit_script` responses also include this `diagnostics` field for GDScript files.
+`valid` is true when the script parses without errors. `create_script` and `edit_script` responses also include this `diagnostics` field for GDScript files; pass `--diagnostics false` to skip the (potentially headless-subprocess) diagnostics run for faster writes.
 
 ### validate_scene
 
@@ -227,6 +230,8 @@ Defaults: width 1280, height 720, transparent background off, output directory `
 ```
 
 Issues use `{ severity, category, message, node_path? }` with categories `load`, `instantiate`, `duplicate_name`, `missing_resource`, and `cyclic_dependency`.
+
+Pass `--check-instantiate false` to skip the `PackedScene.instantiate()` tree-build check and keep only the faster structural/dependency checks.
 
 ### generate_project_guidance
 

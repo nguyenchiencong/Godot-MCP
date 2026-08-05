@@ -2,6 +2,31 @@
 class_name MCPScriptCommands
 extends MCPBaseCommandProcessor
 
+# Compiled once in _init() instead of on every metadata extraction call.
+var _class_name_regex := RegEx.new()
+var _extends_regex := RegEx.new()
+var _method_regex := RegEx.new()
+var _signal_regex := RegEx.new()
+
+# Lazily-created validation processor instance, reused across diagnostics
+# calls for the lifetime of this processor (editor session).
+var _validation_commands = null
+
+func _init() -> void:
+	_class_name_regex.compile("class_name\\s+([a-zA-Z_][a-zA-Z0-9_]*)")
+	_extends_regex.compile("extends\\s+([a-zA-Z_][a-zA-Z0-9_]*)")
+	_method_regex.compile("func\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\(")
+	_signal_regex.compile("signal\\s+([a-zA-Z_][a-zA-Z0-9_]*)")
+
+func _exit_tree() -> void:
+	# Free the lazily-created validation processor (and its subprocess cache)
+	# when this processor leaves the tree, so no Node leak accumulates on
+	# shutdown. Session caching is preserved: the instance is only recreated
+	# lazily on the next diagnostics call while the editor session lives.
+	if _validation_commands != null:
+		_validation_commands.free()
+		_validation_commands = null
+
 func process_command(client_id: int, command_type: String, params: Dictionary, command_id: String) -> bool:
 	match command_type:
 		"create_script":
@@ -60,6 +85,7 @@ func _create_script(client_id: int, params: Dictionary, command_id: String) -> v
 	var script_path = params.get("script_path", "")
 	var content = params.get("content", "")
 	var node_path = params.get("node_path", "")
+	var diagnostics := bool(params.get("diagnostics", true))
 	
 	# Validation
 	if script_path.is_empty():
@@ -139,7 +165,7 @@ func _create_script(client_id: int, params: Dictionary, command_id: String) -> v
 		"script_path": script_path,
 		"node_path": node_path
 	}
-	if script_path.ends_with(".gd"):
+	if diagnostics and script_path.ends_with(".gd"):
 		result["diagnostics"] = _diagnose_script(script_path)
 	
 	_send_success(client_id, result, command_id)
@@ -147,6 +173,7 @@ func _create_script(client_id: int, params: Dictionary, command_id: String) -> v
 func _edit_script(client_id: int, params: Dictionary, command_id: String) -> void:
 	var script_path = params.get("script_path", "")
 	var content = params.get("content", "")
+	var diagnostics := bool(params.get("diagnostics", true))
 	
 	# Validation
 	if script_path.is_empty():
@@ -178,7 +205,7 @@ func _edit_script(client_id: int, params: Dictionary, command_id: String) -> voi
 	var result := {
 		"script_path": script_path
 	}
-	if script_path.ends_with(".gd"):
+	if diagnostics and script_path.ends_with(".gd"):
 		result["diagnostics"] = _diagnose_script(script_path)
 	
 	_send_success(client_id, result, command_id)
@@ -284,16 +311,12 @@ func _get_script_metadata(client_id: int, params: Dictionary, command_id: String
 		var content = file.get_as_text()
 		
 		# Extract class_name
-		var class_regex = RegEx.new()
-		class_regex.compile("class_name\\s+([a-zA-Z_][a-zA-Z0-9_]*)")
-		var result = class_regex.search(content)
+		var result = _class_name_regex.search(content)
 		if result:
 			class_name_str = result.get_string(1)
 		
 		# Extract extends
-		var extends_regex = RegEx.new()
-		extends_regex.compile("extends\\s+([a-zA-Z_][a-zA-Z0-9_]*)")
-		result = extends_regex.search(content)
+		result = _extends_regex.search(content)
 		if result:
 			extends_class = result.get_string(1)
 		
@@ -305,16 +328,12 @@ func _get_script_metadata(client_id: int, params: Dictionary, command_id: String
 		var methods = []
 		var signals = []
 		
-		var method_regex = RegEx.new()
-		method_regex.compile("func\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\(")
-		var method_matches = method_regex.search_all(content)
+		var method_matches = _method_regex.search_all(content)
 		
 		for match_result in method_matches:
 			methods.append(match_result.get_string(1))
 		
-		var signal_regex = RegEx.new()
-		signal_regex.compile("signal\\s+([a-zA-Z_][a-zA-Z0-9_]*)")
-		var signal_matches = signal_regex.search_all(content)
+		var signal_matches = _signal_regex.search_all(content)
 		
 		for match_result in signal_matches:
 			signals.append(match_result.get_string(1))
@@ -331,17 +350,17 @@ func _get_script_metadata(client_id: int, params: Dictionary, command_id: String
 # parse-time class reference would break this file in fresh checkouts or
 # headless runs. Loading by path has no parse-time dependency.
 func _diagnose_script(script_path: String) -> Dictionary:
-	var validation_commands_script = load("res://addons/godot_mcp/commands/validation_commands.gd")
-	if validation_commands_script == null:
-		return {"error": "Failed to load validation commands module"}
-	var validation_commands = validation_commands_script.new()
-	if validation_commands == null or not validation_commands.has_method("diagnose_script"):
-		if validation_commands:
-			validation_commands.free()
-		return {"error": "Validation commands module does not provide diagnose_script"}
-	var result: Dictionary = validation_commands.diagnose_script(script_path)
-	validation_commands.free()
-	return result
+	if _validation_commands == null:
+		var validation_commands_script = load("res://addons/godot_mcp/commands/validation_commands.gd")
+		if validation_commands_script == null:
+			return {"error": "Failed to load validation commands module"}
+		var validation_commands = validation_commands_script.new()
+		if validation_commands == null or not validation_commands.has_method("diagnose_script"):
+			if validation_commands:
+				validation_commands.free()
+			return {"error": "Validation commands module does not provide diagnose_script"}
+		_validation_commands = validation_commands
+	return _validation_commands.diagnose_script(script_path)
 
 
 func _get_current_script(client_id: int, params: Dictionary, command_id: String) -> void:

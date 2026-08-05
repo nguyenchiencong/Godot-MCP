@@ -9,16 +9,42 @@ interface CreateScriptParams {
   script_path: string;
   content: string;
   node_path?: string;
+  diagnostics?: boolean;
 }
 
 interface EditScriptParams {
   script_path: string;
   content: string;
+  diagnostics?: boolean;
 }
 
 interface GetScriptParams {
   script_path?: string;
   node_path?: string;
+}
+
+/**
+ * Renders the `diagnostics` field returned by create_script/edit_script into
+ * a concise one- or multi-line summary. Returns an empty string when
+ * diagnostics were not requested or are absent from the result.
+ */
+function formatDiagnostics(diagnostics: any): string {
+  if (!diagnostics) {
+    return '';
+  }
+  if (typeof diagnostics.error === 'string' && diagnostics.error.length > 0) {
+    return `Diagnostics unavailable: ${diagnostics.error}`;
+  }
+  if (diagnostics.valid) {
+    return 'Diagnostics: valid (0 errors).';
+  }
+  const errorCount = diagnostics.error_count ?? (diagnostics.errors?.length ?? 0);
+  let summary = `Diagnostics: ${errorCount} error(s):`;
+  for (const error of diagnostics.errors ?? []) {
+    const location = error.line > 0 ? `line ${error.line}` : 'unknown location';
+    summary += `\n  [${location}] ${error.message}`;
+  }
+  return summary;
 }
 
 /**
@@ -35,22 +61,35 @@ export const scriptTools: MCPTool[] = [
         .describe('Content of the script'),
       node_path: z.string().optional()
         .describe('Path to a node to attach the script to (optional)'),
+      diagnostics: z.boolean().optional()
+        .describe('Run GDScript diagnostics after writing (default true); set false to skip the headless parse fallback for faster writes.'),
     }),
-    execute: async ({ script_path, content, node_path }: CreateScriptParams): Promise<string> => {
+    execute: async ({ script_path, content, node_path, diagnostics }: CreateScriptParams): Promise<string> => {
       const godot = getGodotConnection();
       
       try {
-        const result = await godot.sendCommand<CommandResult>('create_script', {
+        const params: Record<string, any> = {
           script_path,
           content,
-          node_path,
-        });
+        };
+        if (node_path !== undefined) {
+          params.node_path = node_path;
+        }
+        if (diagnostics !== undefined) {
+          params.diagnostics = diagnostics;
+        }
+        const result = await godot.sendCommand<CommandResult>('create_script', params);
         
         const attachMessage = node_path 
           ? ` and attached to node at ${node_path}` 
           : '';
         
-        return `Created script at ${result.script_path}${attachMessage}`;
+        let output = `Created script at ${result.script_path}${attachMessage}`;
+        const diagnosticsSummary = formatDiagnostics(result.diagnostics);
+        if (diagnosticsSummary) {
+          output += `\n${diagnosticsSummary}`;
+        }
+        return output;
       } catch (error) {
         throw new Error(`Failed to create script: ${(error as Error).message}`);
       }
@@ -65,17 +104,28 @@ export const scriptTools: MCPTool[] = [
         .describe('Path to the script file to edit (e.g. "res://scripts/player.gd")'),
       content: z.string()
         .describe('New content of the script'),
+      diagnostics: z.boolean().optional()
+        .describe('Run GDScript diagnostics after writing (default true); set false to skip the headless parse fallback for faster writes.'),
     }),
-    execute: async ({ script_path, content }: EditScriptParams): Promise<string> => {
+    execute: async ({ script_path, content, diagnostics }: EditScriptParams): Promise<string> => {
       const godot = getGodotConnection();
       
       try {
-        await godot.sendCommand('edit_script', {
+        const params: Record<string, any> = {
           script_path,
           content,
-        });
+        };
+        if (diagnostics !== undefined) {
+          params.diagnostics = diagnostics;
+        }
+        const result = await godot.sendCommand<CommandResult>('edit_script', params);
         
-        return `Updated script at ${script_path}`;
+        let output = `Updated script at ${result.script_path}`;
+        const diagnosticsSummary = formatDiagnostics(result.diagnostics);
+        if (diagnosticsSummary) {
+          output += `\n${diagnosticsSummary}`;
+        }
+        return output;
       } catch (error) {
         throw new Error(`Failed to edit script: ${(error as Error).message}`);
       }

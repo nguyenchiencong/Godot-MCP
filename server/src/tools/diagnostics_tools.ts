@@ -11,6 +11,7 @@ interface GetScriptDiagnosticsParams {
 
 interface ValidateSceneParams {
   scene_path: string;
+  check_instantiate?: boolean;
 }
 
 /**
@@ -79,14 +80,20 @@ export const diagnosticsTools: MCPTool[] = [
     parameters: z.object({
       scene_path: z.string()
         .describe('Path to the scene file to validate (e.g. "res://scenes/main.tscn")'),
+      check_instantiate: z.boolean().optional()
+        .describe('Whether to run PackedScene.instantiate() as part of validation (default true); set false to skip the instantiation check for faster structural/dependency-only validation.'),
     }),
-    execute: async ({ scene_path }: ValidateSceneParams): Promise<string> => {
+    execute: async ({ scene_path, check_instantiate }: ValidateSceneParams): Promise<string> => {
       const godot = getGodotConnection();
 
       try {
-        const result = await godot.sendCommand<CommandResult>('validate_scene', {
+        const params: Record<string, any> = {
           scene_path,
-        });
+        };
+        if (check_instantiate !== undefined) {
+          params.check_instantiate = check_instantiate;
+        }
+        const result = await godot.sendCommand<CommandResult>('validate_scene', params);
 
         const issues = (result.issues ?? []) as SceneValidationIssue[];
         if (issues.length === 0) {

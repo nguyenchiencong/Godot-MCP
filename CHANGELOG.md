@@ -11,6 +11,13 @@ All notable changes to this project will be documented in this file.
 - `generate_project_guidance` tool/command that scans the project (autoloads, input actions, scenes, key scripts, settings) and writes `res://addons/godot_mcp/ai/project_guide.md`, optionally writing or appending `res://AGENTS.md` (an existing `AGENTS.md` is never overwritten unless `force` is set)
 - `create_script` and `edit_script` responses now include a `diagnostics` field reporting parse errors for GDScript files
 
+### Changed
+- Per-command payload logging (send/receive) is now gated behind `GODOT_MCP_DEBUG=1`, removing stderr I/O on normal commands; lifecycle/error logs remain unconditional
+- `capture_scene` reads the PNG from disk (written by Godot) instead of shipping base64 over the WebSocket by default; `return_base64: true` restores the old behavior, and `allow_large: true` lifts the 4MP capture limit
+- `create_script`/`edit_script` headless diagnostics subprocess results are cached per script content (bounded to 64 entries) and can be skipped with `diagnostics: false` for faster writes
+- `validate_scene` runs a single dependency scan shared by all checks and can skip `PackedScene.instantiate()` with `check_instantiate: false`
+- Fixed a reconnect edge case where `disconnect()` during a pending reconnect timer would still trigger a reconnect
+
 ## 1.0.10 - 2026-08-05
 
 ### Added

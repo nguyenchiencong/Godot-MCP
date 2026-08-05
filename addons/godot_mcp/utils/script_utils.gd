@@ -2,6 +2,23 @@
 class_name ScriptUtils
 extends RefCounted
 
+# Compiled regexes used by the parsing helpers. GDScript has no static class
+# variables, so the cache lives process-wide in Engine metadata and each
+# pattern is compiled once on first use instead of on every call.
+static func _get_regex_cache() -> Dictionary:
+	if Engine.has_meta("ScriptUtilsRegexCache"):
+		return Engine.get_meta("ScriptUtilsRegexCache")
+	var cache := {
+		"class_name": RegEx.new(),
+		"extends": RegEx.new(),
+		"method": RegEx.new()
+	}
+	cache["class_name"].compile("class_name\\s+([A-Za-z0-9_]+)")
+	cache["extends"].compile("extends\\s+([A-Za-z0-9_]+)")
+	cache["method"].compile("func\\s+([A-Za-z0-9_]+)\\s*\\(")
+	Engine.set_meta("ScriptUtilsRegexCache", cache)
+	return cache
+
 # Create a new GDScript with basic template content
 static func create_new_script(class_name_str: String = "", extends_type: String = "Node") -> GDScript:
 	var script = GDScript.new()
@@ -62,17 +79,15 @@ static func get_script_info(path: String) -> Dictionary:
 	var content = file.get_as_text()
 	file = null  # Close the file
 	
+	var cache := _get_regex_cache()
+
 	# Find class_name
-	var class_name_regex = RegEx.new()
-	class_name_regex.compile("class_name\\s+([A-Za-z0-9_]+)")
-	var matches = class_name_regex.search(content)
+	var matches = cache["class_name"].search(content)
 	if matches:
 		result["class_name"] = matches.get_string(1)
 	
 	# Find extends
-	var extends_regex = RegEx.new()
-	extends_regex.compile("extends\\s+([A-Za-z0-9_]+)")
-	matches = extends_regex.search(content)
+	matches = cache["extends"].search(content)
 	if matches:
 		result["extends"] = matches.get_string(1)
 	
@@ -90,10 +105,7 @@ static func get_script_methods(path: String) -> Array:
 	var content = file.get_as_text()
 	file = null  # Close the file
 	
-	var method_regex = RegEx.new()
-	method_regex.compile("func\\s+([A-Za-z0-9_]+)\\s*\\(")
-	
-	var matches = method_regex.search_all(content)
+	var matches = _get_regex_cache()["method"].search_all(content)
 	for match_idx in range(matches.size()):
 		methods.append(matches[match_idx].get_string(1))
 	

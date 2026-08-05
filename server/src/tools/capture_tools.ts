@@ -1,5 +1,6 @@
 // File: /server/src/tools/capture_tools.ts
 import { z } from 'zod';
+import { readFile } from 'node:fs/promises';
 import { getGodotConnection } from '../utils/godot_connection.js';
 import { MCPTool, MCPToolResult, CommandResult } from '../utils/types.js';
 
@@ -15,7 +16,12 @@ interface CaptureSceneParams {
   height?: number;
   transparent?: boolean;
   output_path?: string;
+  return_base64?: boolean;
+  allow_large?: boolean;
 }
+
+/** Safety cap on capture area (width x height); mirrors the GDScript-side guard. */
+const MAX_CAPTURE_PIXELS = 4000000;
 
 /**
  * Definition for the scene capture tool.
@@ -35,9 +41,18 @@ export const captureTools: MCPTool[] = [
         .describe('Whether the background should be transparent (default: false).'),
       output_path: z.string().optional()
         .describe('Absolute or res:// path where the PNG should also be saved. Defaults to a file under user://mcp_captures.'),
+      return_base64: z.boolean().optional()
+        .describe('Whether the response should include the PNG as base64 in addition to writing it to disk (default: false; the PNG is read from disk instead).'),
+      allow_large: z.boolean().optional()
+        .describe('Allow captures larger than 4,000,000 pixels (width x height). Defaults to false to protect memory.'),
     }),
-    execute: async ({ scene_path, width, height, transparent, output_path }: CaptureSceneParams): Promise<MCPToolResult> => {
+    execute: async ({ scene_path, width, height, transparent, output_path, return_base64, allow_large }: CaptureSceneParams): Promise<MCPToolResult> => {
       const godot = getGodotConnection();
+
+      // Client-side mirror of the GDScript guard: refuse huge captures unless explicitly allowed.
+      if (width !== undefined && height !== undefined && width * height > MAX_CAPTURE_PIXELS && allow_large !== true) {
+        throw new Error(`Capture size ${width}x${height} (${width * height} pixels) exceeds the ${MAX_CAPTURE_PIXELS} pixel limit. Set allow_large: true to permit larger captures.`);
+      }
 
       const params: Record<string, unknown> = {};
       if (scene_path !== undefined) params.scene_path = scene_path;
@@ -45,12 +60,28 @@ export const captureTools: MCPTool[] = [
       if (height !== undefined) params.height = height;
       if (transparent !== undefined) params.transparent = transparent;
       if (output_path !== undefined) params.output_path = output_path;
+      if (return_base64 !== undefined) params.return_base64 = return_base64;
+      if (allow_large !== undefined) params.allow_large = allow_large;
 
       try {
         const result = await godot.sendCommand<CommandResult>('capture_scene', params);
 
-        if (!result.image_base64) {
-          throw new Error('Capture response did not include an image (image_base64 missing)');
+        let imageData: string;
+        if (result.image_base64) {
+          // Backward compatible: GDScript returned the PNG as base64 directly.
+          imageData = result.image_base64;
+        } else {
+          // New default: read the PNG file that Godot wrote to disk.
+          const absolutePath = result.absolute_path;
+          if (!absolutePath) {
+            throw new Error('Capture response did not include an image (image_base64 missing) and no absolute_path was returned');
+          }
+          try {
+            const buf = await readFile(absolutePath);
+            imageData = buf.toString('base64');
+          } catch (readError) {
+            throw new Error(`Failed to read captured PNG at ${absolutePath}: ${(readError as Error).message}`);
+          }
         }
 
         const filePath = result.file_path ?? result.absolute_path ?? 'a temporary file';
@@ -58,7 +89,7 @@ export const captureTools: MCPTool[] = [
 
         return {
           content: [
-            { type: 'image', data: result.image_base64, mimeType: 'image/png' },
+            { type: 'image', data: imageData, mimeType: 'image/png' },
             { type: 'text', text },
           ],
         };
