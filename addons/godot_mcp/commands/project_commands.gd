@@ -31,6 +31,9 @@ func process_command(client_id: int, command_type: String, params: Dictionary, c
 		"run_specific_scene":
 			_run_specific_scene(client_id, params, command_id)
 			return true
+		"generate_project_guidance":
+			_generate_project_guidance(client_id, params, command_id)
+			return true
 	return false  # Command not handled
 
 func _get_project_info(client_id: int, _params: Dictionary, command_id: String) -> void:
@@ -296,3 +299,258 @@ func _get_editor_interface():
 		return null
 	
 	return plugin.get_editor_interface()
+
+func _generate_project_guidance(client_id: int, params: Dictionary, command_id: String) -> void:
+	var include_agents_md: bool = (params.get("include_agents_md", false) == true)
+	var force: bool = (params.get("force", false) == true)
+
+	# Gather project facts
+	var project_name: String = ProjectSettings.get_setting("application/config/name", "Untitled Project")
+	var main_scene: String = ProjectSettings.get_setting("application/run/main_scene", "")
+	var features = ProjectSettings.get_setting("application/config/features", [])
+	if features.is_empty():
+		features = ProjectSettings.get_setting("features", [])
+	var renderer: String = ProjectSettings.get_setting("rendering/renderer/rendering_method", "")
+	var version_info: Dictionary = Engine.get_version_info()
+	var godot_version: String = str(version_info.get("string", ""))
+
+	var autoloads: Array = _collect_autoloads()
+	var input_actions: Array = _collect_input_actions()
+	var inventory: Dictionary = _collect_scene_inventory(autoloads)
+	var scenes: Array = inventory["scenes"]
+	var key_scripts: Array = inventory["key_scripts"]
+
+	# Write the full project guide first
+	var guide_path: String = "res://addons/godot_mcp/ai/project_guide.md"
+	var ai_dir: String = ProjectSettings.globalize_path("res://addons/godot_mcp/ai")
+	if not DirAccess.dir_exists_absolute(ai_dir):
+		var dir_error = DirAccess.make_dir_recursive_absolute(ai_dir)
+		if dir_error != OK:
+			return _send_error(client_id, "Failed to create guide directory: %s (Error code: %d)" % [ai_dir, dir_error], command_id)
+
+	var guide_content: String = _build_project_guide(project_name, main_scene, godot_version, features, renderer, autoloads, input_actions, scenes, key_scripts)
+	var guide_write_error = _write_text_file(guide_path, guide_content)
+	if guide_write_error != OK:
+		return _send_error(client_id, "Failed to write project guide file: %s (Error code: %d)" % [guide_path, guide_write_error], command_id)
+
+	var written_paths: Array = [guide_path]
+	var agents_md_path: String = "res://AGENTS.md"
+	var action: String = "skipped"
+
+	if include_agents_md:
+		var agents_content: String = ""
+		var agents_action: String = "created"
+
+		if FileAccess.file_exists(agents_md_path):
+			if force:
+				agents_action = "replaced"
+				agents_content = _build_agents_md(project_name, guide_path, autoloads, input_actions, scenes)
+			else:
+				# Safety: never clobber an existing AGENTS.md unless force is requested
+				agents_action = "appended"
+				var existing_file = FileAccess.open(agents_md_path, FileAccess.READ)
+				if existing_file:
+					agents_content = existing_file.get_as_text()
+					existing_file = null  # Close the file
+				agents_content += "\n\n" + _build_agents_guide_body(project_name, guide_path, autoloads, input_actions, scenes)
+		else:
+			agents_content = _build_agents_md(project_name, guide_path, autoloads, input_actions, scenes)
+
+		var agents_write_error = _write_text_file(agents_md_path, agents_content)
+		if agents_write_error != OK:
+			return _send_error(client_id, "Failed to write AGENTS.md file: %s (Error code: %d)" % [agents_md_path, agents_write_error], command_id)
+
+		written_paths.append(agents_md_path)
+		action = agents_action
+
+	_send_success(client_id, {
+		"written_paths": written_paths,
+		"scene_count": scenes.size(),
+		"autoload_count": autoloads.size(),
+		"input_action_count": input_actions.size(),
+		"guide_path": guide_path,
+		"agents_md_path": agents_md_path if include_agents_md else "",
+		"action": action
+	}, command_id)
+
+func _collect_autoloads() -> Array:
+	var autoloads: Array = []
+	var property_list: Array = ProjectSettings.get_property_list()
+	for property in property_list:
+		var property_name: String = str(property.get("name", ""))
+		if not property_name.begins_with("autoload/"):
+			continue
+		var autoload_name: String = property_name.substr("autoload/".length())
+		var autoload_value: String = str(ProjectSettings.get_setting(property_name, ""))
+		if autoload_value.begins_with("*"):
+			autoload_value = autoload_value.substr(1)
+		autoloads.append({
+			"name": autoload_name,
+			"path": autoload_value
+		})
+	return autoloads
+
+func _collect_input_actions() -> Array:
+	var actions: Array = []
+	var property_list: Array = ProjectSettings.get_property_list()
+	for property in property_list:
+		var property_name: String = str(property.get("name", ""))
+		if not property_name.begins_with("input/"):
+			continue
+		var action_name: String = property_name.substr("input/".length())
+		if action_name.is_empty() or action_name.begins_with("ui_"):
+			continue
+		actions.append(action_name)
+	actions.sort()
+	return actions
+
+func _collect_scene_inventory(autoloads: Array) -> Dictionary:
+	var scenes: Array = []
+	var key_scripts: Array = []
+	var autoload_script_paths: Array = []
+	for autoload in autoloads:
+		autoload_script_paths.append(autoload["path"])
+
+	var dir = DirAccess.open("res://")
+	if dir:
+		_scan_project_files(dir, "", scenes, key_scripts, autoload_script_paths)
+
+	return {
+		"scenes": scenes,
+		"key_scripts": key_scripts
+	}
+
+func _scan_project_files(dir: DirAccess, path: String, scenes: Array, key_scripts: Array, autoload_script_paths: Array) -> void:
+	dir.list_dir_begin()
+	var file_name = dir.get_next()
+
+	while file_name != "":
+		if dir.current_is_dir():
+			if file_name == "addons" or file_name == ".godot" or file_name == ".git":
+				file_name = dir.get_next()
+				continue
+			var subdir = DirAccess.open("res://" + path + file_name)
+			if subdir:
+				_scan_project_files(subdir, path + file_name + "/", scenes, key_scripts, autoload_script_paths)
+		else:
+			var file_path: String = "res://" + path + file_name
+			if file_name.ends_with(".tscn") or file_name.ends_with(".scn"):
+				scenes.append(file_path)
+			elif file_name.ends_with(".gd"):
+				if autoload_script_paths.has(file_path) or _is_key_script(file_path):
+					key_scripts.append(file_path)
+			elif file_name.ends_with(".cs"):
+				key_scripts.append(file_path)
+
+		file_name = dir.get_next()
+
+	dir.list_dir_end()
+
+func _is_key_script(path: String) -> bool:
+	var file = FileAccess.open(path, FileAccess.READ)
+	if not file:
+		return false
+	var head: String = file.get_buffer(8192).get_string_from_utf8()
+	file = null  # Close the file
+	return head.contains("class_name ") or head.contains("@tool")
+
+func _write_text_file(path: String, content: String) -> int:
+	var file = FileAccess.open(path, FileAccess.WRITE)
+	if not file:
+		return FileAccess.get_open_error()
+	file.store_string(content)
+	file = null  # Close the file
+	return OK
+
+func _build_project_guide(project_name: String, main_scene: String, godot_version: String, features, renderer: String, autoloads: Array, input_actions: Array, scenes: Array, key_scripts: Array) -> String:
+	var lines: Array = []
+	lines.append("# Project Guide: %s" % project_name)
+	lines.append("")
+	lines.append("Auto-generated by the Godot MCP `generate_project_guidance` command. Regenerate this file whenever the project structure changes.")
+	lines.append("")
+	lines.append("## Project Overview")
+	lines.append("")
+	lines.append("- **Application name:** %s" % project_name)
+	lines.append("- **Main scene:** %s" % (main_scene if not main_scene.is_empty() else "Not configured"))
+	lines.append("- **Godot version:** %s" % godot_version)
+	lines.append("- **Renderer:** %s" % (renderer if not renderer.is_empty() else "Not configured"))
+	lines.append("- **Feature tags:** %s" % (", ".join(features) if features.size() > 0 else "None"))
+	lines.append("")
+	lines.append("## Autoloads")
+	lines.append("")
+	if autoloads.is_empty():
+		lines.append("No autoloads configured.")
+	else:
+		lines.append("| Name | Path |")
+		lines.append("| --- | --- |")
+		for autoload in autoloads:
+			lines.append("| %s | %s |" % [autoload["name"], autoload["path"]])
+	lines.append("")
+	lines.append("## Input Actions")
+	lines.append("")
+	if input_actions.is_empty():
+		lines.append("No custom input actions defined (built-in ui_ actions are available but not listed).")
+	else:
+		for action_name in input_actions:
+			lines.append("- %s" % action_name)
+	lines.append("")
+	lines.append("## Scenes")
+	lines.append("")
+	if scenes.is_empty():
+		lines.append("No scenes found in the project.")
+	else:
+		for scene_path in scenes:
+			lines.append("- %s" % scene_path)
+	lines.append("")
+	lines.append("## Key Scripts")
+	lines.append("")
+	lines.append("Scripts that are globally referenced (class_name, @tool, autoload) or written in C#.")
+	lines.append("")
+	if key_scripts.is_empty():
+		lines.append("No key scripts found.")
+	else:
+		for script_path in key_scripts:
+			lines.append("- %s" % script_path)
+	lines.append("")
+	lines.append("## Notes for AI Agents")
+	lines.append("")
+	lines.append("- Do not guess the project structure. Read this guide and the referenced files before creating, moving, or editing scenes and scripts.")
+	lines.append("- The main scene is `%s`. Run it to see the application entry point." % (main_scene if not main_scene.is_empty() else "not configured"))
+	lines.append("- Autoloads are loaded globally at startup; reference them by name instead of instancing them.")
+	lines.append("- Only project-defined input actions are listed; built-in ui_ actions are still available.")
+	lines.append("- Prefer loading scenes with ResourceLoader and instancing them with `instantiate()`.")
+	lines.append("- Follow the project code style: descriptive names, no emoji, and Python-style conditional expressions in GDScript (no C-style ternary).")
+	lines.append("- Regenerate this guide with the `generate_project_guidance` command after significant project changes.")
+	return "\n".join(lines) + "\n"
+
+func _build_agents_guide_body(project_name: String, guide_path: String, autoloads: Array, input_actions: Array, scenes: Array) -> String:
+	var relative_guide: String = guide_path.trim_prefix("res://")
+	var lines: Array = []
+	lines.append("## Godot MCP Project Guide (auto-generated)")
+	lines.append("")
+	lines.append("This section is maintained by the Godot MCP `generate_project_guidance` command. Do not edit it by hand; regenerate it to refresh the contents.")
+	lines.append("")
+	lines.append("Read the full project guide at [%s](%s)." % [relative_guide, relative_guide])
+	lines.append("")
+	lines.append("### Project Summary")
+	lines.append("")
+	lines.append("- **Application:** %s" % project_name)
+	lines.append("- **Scene count:** %d" % scenes.size())
+	lines.append("- **Autoload count:** %d" % autoloads.size())
+	lines.append("- **Input action count:** %d" % input_actions.size())
+	lines.append("")
+	lines.append("### Notes for AI Agents")
+	lines.append("")
+	lines.append("- Read the full project guide before guessing at the project structure.")
+	lines.append("- Autoloads are available globally; reference them by name.")
+	lines.append("- Regenerate this guidance with the `generate_project_guidance` command when the project changes.")
+	return "\n".join(lines)
+
+func _build_agents_md(project_name: String, guide_path: String, autoloads: Array, input_actions: Array, scenes: Array) -> String:
+	var lines: Array = []
+	lines.append("# %s" % project_name)
+	lines.append("")
+	lines.append("> Project guidance auto-generated by the Godot MCP `generate_project_guidance` command.")
+	lines.append("")
+	lines.append(_build_agents_guide_body(project_name, guide_path, autoloads, input_actions, scenes))
+	return "\n".join(lines) + "\n"

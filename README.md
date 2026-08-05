@@ -21,11 +21,15 @@ A Command Line Interface (CLI) for AI assistants to interact with Godot Engine, 
 - **Runtime Expression Evaluation**: Execute expressions in live games using `evaluate_runtime`
 - **Dynamic Script Access**: Read scripts via `godot://script/{path}` and metadata via `godot://script/{path}/metadata`
 - **Script Editing Tools**: Create, edit, or template scripts directly through MCP commands
+- **Script Diagnostics**: Parse GDScript files with `get_script_diagnostics`; `create_script` and `edit_script` return parse diagnostics automatically
 - **Node Management**: Create, remove, list, and inspect nodes with automatic path normalization
 - **Node Warning Inspection**: Inspect current scene tree configuration warnings with `get_node_warnings`
 - **Scene Operations**: Create, delete, open, and save scenes; query project info and current scene state
+- **Visual Scene Feedback**: Render any scene into an off-screen viewport with `capture_scene` and receive the PNG image directly, so vision-capable models can see the scene
+- **Scene Validation**: Check structural health of .tscn scenes (duplicate node names, missing scripts/resources, cyclic dependencies) with `validate_scene`
 - **Asset Management**: List assets by type and enumerate project files
 - **Project Reload**: Restart editor, reload scenes, or rescan filesystem for external changes
+- **Project Guidance**: Scan the project and generate `res://addons/godot_mcp/ai/project_guide.md` (and optionally `AGENTS.md`) with `generate_project_guidance`
 - **Debug Output Access**: Snapshot logs with `get_debug_output` or tail them live via `stream_debug_output`
 - **Stack Trace Capture**: Pull the editor's Stack Trace text or grab structured frames via `get_stack_trace_panel` / `get_stack_frames_panel`
 - **Editor Automation**: Execute GDScript in editor context via `execute_editor_script`

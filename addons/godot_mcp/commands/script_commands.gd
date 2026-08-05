@@ -135,10 +135,14 @@ func _create_script(client_id: int, params: Dictionary, command_id: String) -> v
 	if script_resource:
 		editor_interface.edit_script(script_resource)
 	
-	_send_success(client_id, {
+	var result := {
 		"script_path": script_path,
 		"node_path": node_path
-	}, command_id)
+	}
+	if script_path.ends_with(".gd"):
+		result["diagnostics"] = _diagnose_script(script_path)
+	
+	_send_success(client_id, result, command_id)
 
 func _edit_script(client_id: int, params: Dictionary, command_id: String) -> void:
 	var script_path = params.get("script_path", "")
@@ -171,9 +175,13 @@ func _edit_script(client_id: int, params: Dictionary, command_id: String) -> voi
 	file.store_string(content)
 	file = null  # Close the file
 	
-	_send_success(client_id, {
+	var result := {
 		"script_path": script_path
-	}, command_id)
+	}
+	if script_path.ends_with(".gd"):
+		result["diagnostics"] = _diagnose_script(script_path)
+	
+	_send_success(client_id, result, command_id)
 
 func _get_script(client_id: int, params: Dictionary, command_id: String) -> void:
 	var script_path = params.get("script_path", "")
@@ -315,6 +323,26 @@ func _get_script_metadata(client_id: int, params: Dictionary, command_id: String
 		metadata["signals"] = signals
 	
 	_send_success(client_id, metadata, command_id)
+
+# Runs script diagnostics after a successful write so the agent immediately
+# sees parse errors. The validation processor is loaded by path instead of
+# referencing its class_name directly: the global class cache only knows
+# MCPValidationCommands after the editor rescans the filesystem, so a
+# parse-time class reference would break this file in fresh checkouts or
+# headless runs. Loading by path has no parse-time dependency.
+func _diagnose_script(script_path: String) -> Dictionary:
+	var validation_commands_script = load("res://addons/godot_mcp/commands/validation_commands.gd")
+	if validation_commands_script == null:
+		return {"error": "Failed to load validation commands module"}
+	var validation_commands = validation_commands_script.new()
+	if validation_commands == null or not validation_commands.has_method("diagnose_script"):
+		if validation_commands:
+			validation_commands.free()
+		return {"error": "Validation commands module does not provide diagnose_script"}
+	var result: Dictionary = validation_commands.diagnose_script(script_path)
+	validation_commands.free()
+	return result
+
 
 func _get_current_script(client_id: int, params: Dictionary, command_id: String) -> void:
 	# Get editor plugin and interfaces

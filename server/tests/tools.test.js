@@ -44,6 +44,12 @@ import { debuggerTools } from '../dist/tools/debugger_tools.js';
 import { inputTools } from '../dist/tools/input_tools.js';
 import { enhancedTools } from '../dist/tools/enhanced_tools.js';
 import { scriptResourceTools } from '../dist/tools/script_resource_tools.js';
+import { captureTools } from '../dist/tools/capture_tools.js';
+import { diagnosticsTools } from '../dist/tools/diagnostics_tools.js';
+
+import { writeFileSync, rmSync } from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 // Parse command line arguments
 const args = process.argv.slice(2);
@@ -59,6 +65,10 @@ const testTimestamp = Date.now();
 const TEST_SCENE_PATH = `res://test_mcp_scene_${testTimestamp}.tscn`;
 const TEST_SCRIPT_PATH = `res://test_mcp_script_${testTimestamp}.gd`;
 const TEST_RESOURCE_PATH = `res://test_mcp_resource_${testTimestamp}.tres`;
+
+// Godot project root (tests/ -> server/ -> project root)
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
 
 if (args.includes('--help') || args.includes('-h')) {
 	log('Godot MCP Tools Integration Test', 'bright');
@@ -94,6 +104,8 @@ const allTools = [
 	...inputTools,
 	...enhancedTools,
 	...scriptResourceTools,
+	...captureTools,
+	...diagnosticsTools,
 ];
 
 const toolMap = new Map(allTools.map(t => [t.name, t]));
@@ -182,6 +194,25 @@ print("Cleaned up test script: ${scriptPath}")
 						}
 					}
 				}
+			},
+			{
+				tool: 'get_script_diagnostics',
+				params: { script_path: 'res://test_debugger.gd' },
+				validate: (result) => result.includes('valid') && result.includes('0 errors')
+			},
+			{
+				tool: 'get_script_diagnostics',
+				get params() {
+					// Write a broken script at the project root so the real parse-error path is exercised
+					const brokenPath = `test_mcp_broken_${testTimestamp}.gd`;
+					writeFileSync(path.join(PROJECT_ROOT, brokenPath), 'extends Node\nfunc broken():\n\tvar x = \n');
+					return { script_path: `res://${brokenPath}` };
+				},
+				validate: (result) => result.includes('error') || result.includes('line') || result.includes('Expected'),
+				cleanup: async () => {
+					rmSync(path.join(PROJECT_ROOT, `test_mcp_broken_${testTimestamp}.gd`), { force: true });
+					rmSync(path.join(PROJECT_ROOT, `test_mcp_broken_${testTimestamp}.gd.uid`), { force: true });
+				}
 			}
 		]
 	},
@@ -252,6 +283,32 @@ print("Cleaned up test resource: ${resourcePath}")
 						}
 					}
 				}
+			},
+			{
+				tool: 'validate_scene',
+				params: { scene_path: 'res://test_main_scene.tscn' },
+				validate: (result) => result.includes('valid') && result.includes('0 issues')
+			},
+			{
+				tool: 'capture_scene',
+				params: { scene_path: 'res://test_main_scene.tscn', width: 320, height: 180 },
+				validate: (result) => {
+					try {
+						const parsed = JSON.parse(result);
+						const imageBlock = parsed.content.find((block) => block.type === 'image');
+						if (!imageBlock) {
+							return false;
+						}
+						const buffer = Buffer.from(imageBlock.data, 'base64');
+						if (buffer.length < 4 || buffer.subarray(0, 4).toString('hex') !== '89504e47') {
+							return false;
+						}
+						const textBlock = parsed.content.find((block) => block.type === 'text');
+						return !!(textBlock && textBlock.text && textBlock.text.includes('captured'));
+					} catch (e) {
+						return false;
+					}
+				}
 			}
 		]
 	},
@@ -284,6 +341,42 @@ print("Cleaned up test resource: ${resourcePath}")
 				params: {},
 				validate: (result) => result.includes('Stop') || result.includes('idle') || result.includes('not'),
 				expectError: false
+			},
+			{
+				tool: 'generate_project_guidance',
+				params: { include_agents_md: false },
+				validate: (result) => result.includes('project_guide.md'),
+				cleanup: async () => {
+					const tool = toolMap.get('execute_editor_script');
+					if (tool) {
+						try {
+							await tool.execute({
+								code: `
+var ai_dir = DirAccess.open("res://addons/godot_mcp/ai")
+if ai_dir:
+	ai_dir.remove("project_guide.md")
+	# Remove the ai directory only when it is now empty
+	ai_dir.list_dir_begin()
+	var has_entries = false
+	var entry = ai_dir.get_next()
+	while entry != "":
+		if entry != "." and entry != "..":
+			has_entries = true
+			break
+		entry = ai_dir.get_next()
+	ai_dir.list_dir_end()
+	if not has_entries:
+		var parent_dir = DirAccess.open("res://addons/godot_mcp")
+		if parent_dir:
+			parent_dir.remove("ai")
+print("Cleaned up test project guide")
+`
+							});
+						} catch (e) {
+							// Ignore cleanup errors
+						}
+					}
+				}
 			}
 		]
 	},

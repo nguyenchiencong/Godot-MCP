@@ -20,6 +20,7 @@ Quick reference for all available tools. Use `godot-mcp --help <tool>` for detai
 | `create_script` | Create a GDScript | `--script-path`, `--content`, `--node-path` (optional) |
 | `edit_script` | Edit a script | `--script-path`, `--content` |
 | `get_script` | Get script content | `--script-path` or `--node-path` |
+| `get_script_diagnostics` | Parse a GDScript file and return compile/parse errors | `--script-path` |
 
 ## Scene Tools
 
@@ -31,6 +32,8 @@ Quick reference for all available tools. Use `godot-mcp --help <tool>` for detai
 | `open_scene` | Open a scene | `--path` |
 | `get_current_scene` | Get current scene info | (none) |
 | `create_resource` | Create a resource | `--resource-type`, `--resource-path`, `--properties` |
+| `capture_scene` | Render a scene into an off-screen viewport and return the PNG image | `--scene-path` (optional), `--width`, `--height`, `--transparent`, `--output-path` |
+| `validate_scene` | Check a scene's structural health | `--scene-path` |
 
 ## Project Tools
 
@@ -44,6 +47,7 @@ Quick reference for all available tools. Use `godot-mcp --help <tool>` for detai
 | `reload_project` | Restart Godot editor | `--save` (default: true) |
 | `reload_scene` | Reload scene from disk | `--scene-path` (optional) |
 | `rescan_filesystem` | Rescan for file changes | (none) |
+| `generate_project_guidance` | Scan the project and write AI guidance files | `--include-agents-md`, `--force` |
 
 ## Asset Tools
 
@@ -133,10 +137,13 @@ godot-mcp update_node_property --node-path "./Player" --property "position" --va
 
 # Script operations
 godot-mcp get_script --script-path "res://scripts/player.gd"
+godot-mcp get_script_diagnostics --script-path "res://scripts/player.gd"
 
 # Scene operations
 godot-mcp open_scene --path "res://scenes/main.tscn"
 godot-mcp get_editor_scene_structure --include-properties true
+godot-mcp capture_scene --scene-path "res://scenes/main.tscn" --width 1280 --height 720
+godot-mcp validate_scene --scene-path "res://scenes/main.tscn"
 
 # Debugging
 godot-mcp run_project
@@ -148,6 +155,9 @@ godot-mcp rescan_filesystem
 godot-mcp reload_scene
 godot-mcp reload_scene --scene-path "res://scenes/main.tscn"
 godot-mcp reload_project --save true
+
+# Project guidance
+godot-mcp generate_project_guidance --include-agents-md true
 
 # Input simulation
 godot-mcp get_input_actions
@@ -170,3 +180,66 @@ godot-mcp simulate_mouse_click --x 400 --y 300
 ```
 
 Sequence step types: `press`, `release`, `tap`, `wait`, `click`
+
+## Response Formats
+
+### capture_scene
+
+Returns the captured PNG as an MCP image content block plus a text summary ("Scene captured and saved to ..."). The underlying command result:
+
+```json
+{
+  "file_path": "user://mcp_captures/capture_1750000000.png",
+  "absolute_path": "C:/Users/you/AppData/Roaming/Godot/app_userdata/YourProject/capture_1750000000.png",
+  "width": 1280,
+  "height": 720,
+  "image_base64": "..."
+}
+```
+
+Defaults: width 1280, height 720, transparent background off, output directory `user://mcp_captures/`. Without `--scene-path`, the scene currently open in the editor is captured.
+
+### get_script_diagnostics
+
+```json
+{
+  "script_path": "res://scripts/player.gd",
+  "exists": true,
+  "valid": false,
+  "error_count": 1,
+  "errors": [
+    { "line": 12, "column": 0, "message": "..." }
+  ]
+}
+```
+
+`valid` is true when the script parses without errors. `create_script` and `edit_script` responses also include this `diagnostics` field for GDScript files.
+
+### validate_scene
+
+```json
+{
+  "scene_path": "res://scenes/main.tscn",
+  "valid": true,
+  "issue_count": 0,
+  "issues": []
+}
+```
+
+Issues use `{ severity, category, message, node_path? }` with categories `load`, `instantiate`, `duplicate_name`, `missing_resource`, and `cyclic_dependency`.
+
+### generate_project_guidance
+
+```json
+{
+  "written_paths": ["res://addons/godot_mcp/ai/project_guide.md"],
+  "scene_count": 3,
+  "autoload_count": 1,
+  "input_action_count": 5,
+  "guide_path": "res://addons/godot_mcp/ai/project_guide.md",
+  "agents_md_path": "res://AGENTS.md",
+  "action": "created"
+}
+```
+
+Writes `res://addons/godot_mcp/ai/project_guide.md` and, when `--include-agents-md` is passed, writes or updates `res://AGENTS.md`. `action` is `created`, `appended`, `replaced`, or `skipped`; an existing `AGENTS.md` is never overwritten unless `--force` is passed.

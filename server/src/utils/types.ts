@@ -1,13 +1,28 @@
 import { z } from 'zod';
 
 /**
+ * A content block accepted by FastMCP 3.25.4 tool results.
+ * Mirrors the literal-typed Content union that fastmcp's execute return
+ * type accepts (TextContent | ImageContent).
+ */
+export type MCPContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'image'; data: string; mimeType: string };
+
+/**
+ * Return type of a tool execute function: either plain text or a FastMCP
+ * content-block result (e.g. an image block plus a text summary).
+ */
+export type MCPToolResult = string | { content: MCPContentBlock[] };
+
+/**
  * Interface for FastMCP tool definition
  */
 export interface MCPTool<T = any> {
   name: string;
   description: string;
   parameters: z.ZodType<T>;
-  execute: (args: T) => Promise<string>;
+  execute: (args: T) => Promise<MCPToolResult>;
 }
 
 /**

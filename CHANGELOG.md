@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Added
+- `capture_scene` tool/command that renders a Godot scene into an off-screen SubViewport and returns the PNG to the AI as an MCP image content block, giving vision-capable models direct visual feedback on the scene
+- `get_script_diagnostics` tool/command to parse a GDScript file and return compile/parse errors with line numbers
+- `validate_scene` tool/command to check a .tscn scene's structural health: loadability, instantiation, duplicate node names, missing scripts/resources, and cyclic dependencies
+- `generate_project_guidance` tool/command that scans the project (autoloads, input actions, scenes, key scripts, settings) and writes `res://addons/godot_mcp/ai/project_guide.md`, optionally writing or appending `res://AGENTS.md` (an existing `AGENTS.md` is never overwritten unless `force` is set)
+- `create_script` and `edit_script` responses now include a `diagnostics` field reporting parse errors for GDScript files
+
 ## 1.0.10 - 2026-08-05
 
 ### Added
