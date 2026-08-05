@@ -32,6 +32,8 @@ var _subscribers: Dictionary = {}
 var _elapsed := 0.0
 var _last_length := 0
 var _cached_output_control: Control = null
+var _cached_output_control_path := NodePath()
+var _initial_output_locate_attempted := false
 var _last_capture_source := "unset"
 var _last_capture_detail := ""
 var _last_capture_timestamp := 0
@@ -42,9 +44,62 @@ var _last_control_search_summary := ""
 
 func _ready() -> void:
 	set_process(false)
+	var scene_tree := get_tree()
+	if scene_tree == null:
+		return
+	if not scene_tree.is_connected("node_added", Callable(self, "_on_node_added")):
+		scene_tree.connect("node_added", Callable(self, "_on_node_added"))
+	if not scene_tree.is_connected("node_removed", Callable(self, "_on_node_removed")):
+		scene_tree.connect("node_removed", Callable(self, "_on_node_removed"))
+
+func _exit_tree() -> void:
+	var scene_tree := get_tree()
+	if scene_tree != null:
+		var node_added_callable := Callable(self, "_on_node_added")
+		if scene_tree.is_connected("node_added", node_added_callable):
+			scene_tree.disconnect("node_added", node_added_callable)
+		var node_removed_callable := Callable(self, "_on_node_removed")
+		if scene_tree.is_connected("node_removed", node_removed_callable):
+			scene_tree.disconnect("node_removed", node_removed_callable)
+	_cached_output_control = null
+
+func _on_node_removed(node: Node) -> void:
+	if is_instance_valid(_cached_output_control) and node == _cached_output_control:
+		# Keep the stored NodePath: the editor may rebuild the output control at
+		# the same path, and path re-resolution is O(depth).
+		_cached_output_control = null
+
+func _on_node_added(node: Node) -> void:
+	if is_instance_valid(_cached_output_control):
+		return
+	if not (node is Control):
+		return
+	# Defer scoring until the new control's ancestry is fully populated.
+	call_deferred("_consider_added_control", node)
+
+func _consider_added_control(node: Node) -> void:
+	if is_instance_valid(_cached_output_control):
+		return
+	if not is_instance_valid(node) or not node.is_inside_tree():
+		return
+	if not (node is Control):
+		return
+	var candidate: Control = node
+	# Scoring is O(ancestor depth), never a tree walk.
+	if _score_output_control(candidate) < OUTPUT_SCORE_THRESHOLD:
+		return
+	_cached_output_control = candidate
+	_cached_output_control_path = candidate.get_path()
+	_last_control_search_summary = "source=node_added; path=%s" % String(candidate.get_path())
 
 func subscribe(client_id: int) -> void:
 	_subscribers[client_id] = true
+	if not is_instance_valid(_cached_output_control):
+		# A fresh subscribe forces one explicit initial resolution so the
+		# baseline capture matches previous behaviour. This is user-driven and
+		# never runs on the poll path. If signal-driven recovery already
+		# cached a control, the explicit locate is skipped.
+		_locate_output_control_explicit()
 	_initialize_baseline()
 	if not is_processing():
 		set_process(true)
@@ -226,6 +281,16 @@ func _fetch_log_file_text() -> String:
 	var content := file.get_as_text()
 	file.close()
 	return content
+
+func _locate_output_control_explicit() -> void:
+	_initial_output_locate_attempted = true
+	if is_instance_valid(_cached_output_control):
+		return
+	var control := _locate_output_control()
+	if is_instance_valid(control):
+		_cached_output_control = control
+		if control.is_inside_tree():
+			_cached_output_control_path = control.get_path()
 
 func _locate_output_control() -> Control:
 	var result := _locate_control_with_scoring(Callable(self, "_score_output_control"), OUTPUT_SCORE_THRESHOLD)
@@ -527,10 +592,49 @@ func _has_editor_log_ancestor(node: Node) -> bool:
 func _get_output_control() -> Control:
 	if is_instance_valid(_cached_output_control):
 		return _cached_output_control
-	_cached_output_control = _locate_output_control()
-	return _cached_output_control
+
+	# Cheap re-resolution: the cached control may have been freed and rebuilt
+	# at the same path (editor UI rebuilds, theme changes, dock rearrangements).
+	# Resolving the stored absolute path is O(depth), not a tree walk.
+	var control := _resolve_output_control_path()
+	if is_instance_valid(control):
+		_cached_output_control = control
+		_last_control_search_summary = "source=path_resolve; path=%s" % String(control.get_path())
+		return control
+
+	# Recovery is signal-driven only: node_removed invalidates the cache,
+	# node_added rescans newly added Controls, and subscribe/get_full_log_text
+	# may force one explicit locate. The poll path never searches the tree.
+	return null
+
+func _resolve_output_control_path() -> Control:
+	if _cached_output_control_path.is_empty():
+		return null
+
+	var tree := get_tree()
+	if tree == null:
+		return null
+	var tree_root := tree.get_root()
+	if not is_instance_valid(tree_root):
+		return null
+
+	var node := tree_root.get_node_or_null(_cached_output_control_path)
+	if not is_instance_valid(node) or not (node is Control):
+		return null
+
+	var candidate: Control = node
+	# A rebuilt editor UI can reuse a path for an unrelated control; only accept
+	# nodes that still meet the same score bar the explicit locate uses, so the
+	# cache cannot be poisoned and low-score unrelated path reuse is avoided.
+	if _score_output_control(candidate) < OUTPUT_SCORE_THRESHOLD:
+		return null
+	return candidate
 
 func get_full_log_text() -> String:
+	if not _initial_output_locate_attempted:
+		# One explicit initial resolution only; repeated direct calls never
+		# search the tree again. Recovery afterwards is signal-driven.
+		_locate_output_control_explicit()
 	return _fetch_log_text()
 
 func clear_log_output() -> Dictionary:

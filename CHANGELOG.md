@@ -10,6 +10,7 @@ All notable changes to this project will be documented in this file.
 - `validate_scene` tool/command to check a .tscn scene's structural health: loadability, instantiation, duplicate node names, missing scripts/resources, and cyclic dependencies
 - `generate_project_guidance` tool/command that scans the project (autoloads, input actions, scenes, key scripts, settings) and writes `res://addons/godot_mcp/ai/project_guide.md`, optionally writing or appending `res://AGENTS.md` (an existing `AGENTS.md` is never overwritten unless `force` is set)
 - `create_script` and `edit_script` responses now include a `diagnostics` field reporting parse errors for GDScript files
+- `server/tests/async_diagnostics.test.js` regression test proving broken-script diagnostics run on a worker thread without blocking the editor (run via `npm run test:async-diagnostics`)
 
 ### Changed
 - Per-command payload logging (send/receive) is now gated behind `GODOT_MCP_DEBUG=1`, removing stderr I/O on normal commands; lifecycle/error logs remain unconditional
@@ -17,6 +18,9 @@ All notable changes to this project will be documented in this file.
 - `create_script`/`edit_script` headless diagnostics subprocess results are cached per script content (bounded to 64 entries) and can be skipped with `diagnostics: false` for faster writes
 - `validate_scene` runs a single dependency scan shared by all checks and can skip `PackedScene.instantiate()` with `check_instantiate: false`
 - Fixed a reconnect edge case where `disconnect()` during a pending reconnect timer would still trigger a reconnect
+- Diagnostics headless parser runs on a dedicated worker thread so broken-script diagnostics no longer block editor frames
+- Debug-output publishing resolves the Output-panel control once and recovers via `SceneTree` signals; the 0.5s poll never scans the editor control tree
+- Four project directory walkers consolidated into one parameterized DFS scanner with preserved outputs
 
 ## 1.0.10 - 2026-08-05
 

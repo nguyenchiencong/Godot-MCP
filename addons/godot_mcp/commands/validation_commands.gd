@@ -21,11 +21,15 @@ extends MCPBaseCommandProcessor
 #      "at: ... (path:line)" location lines) give real error messages and
 #      line numbers that are not available in-process.
 #
-# This processor is synchronous: process_command never awaits, matching the
-# command handler's expectations for non-debugger processors.
-
-var _parse_error_regex := RegEx.new()
-var _parse_location_regex := RegEx.new()
+# The subprocess runs on a dedicated worker thread (a plain Thread, not
+# WorkerThreadPool: a hung child can only leak its own thread, whereas a hung
+# WorkerThreadPool task would permanently consume one of the shared pool
+# slots and cannot be abandoned). The editor main thread awaits the thread's
+# non-blocking is_alive() liveness check on process frames instead of
+# blocking, so diagnostics commands are coroutines and the command handler
+# awaits this processor. A pathological child can leave that command
+# coroutine pending, but the editor main thread stays responsive; this is
+# safer than abandoning a live Thread object.
 
 # Engine-metadata key for the shared subprocess diagnostics cache. GDScript
 # has no static class variables, so the cache lives process-wide in Engine
@@ -37,12 +41,12 @@ const SUBPROCESS_CACHE_META_KEY := "GodotMCPDiagnosticsSubprocessCache"
 # reload) and re-spawning a headless Godot process for identical known-broken
 # content. Only known-invalid diagnostics are ever stored, so a hit always
 # means the script is invalid. Shared process-wide across explicit and auto
-# diagnostics. Single-threaded editor use, so no locking needed.
+# diagnostics. Cache reads and writes stay on the main thread, so no locking
+# needed.
 var _subprocess_cache: Dictionary
+var _active_parser_threads: Array[Thread] = []
 
 func _init() -> void:
-	_parse_error_regex.compile("^SCRIPT ERROR: Parse Error: (.*)$")
-	_parse_location_regex.compile("^\\s*at:\\s+\\S+\\s+\\((.+?):(\\d+)\\)$")
 	# Reuse the shared process-wide cache when it already exists, otherwise
 	# create it and publish it in Engine metadata for other instances.
 	if Engine.has_meta(SUBPROCESS_CACHE_META_KEY):
@@ -52,10 +56,19 @@ func _init() -> void:
 		Engine.set_meta(SUBPROCESS_CACHE_META_KEY, _subprocess_cache)
 
 
+func _exit_tree() -> void:
+	# A suspended diagnostics coroutine may never receive another process_frame
+	# during plugin teardown. Join every successfully started worker here so no
+	# Thread reaches destruction while still owning native thread resources.
+	for worker in _active_parser_threads.duplicate():
+		_reap_parser_thread(worker)
+	_active_parser_threads.clear()
+
+
 func process_command(client_id: int, command_type: String, params: Dictionary, command_id: String) -> bool:
 	match command_type:
 		"get_script_diagnostics":
-			_get_script_diagnostics(client_id, params, command_id)
+			await _get_script_diagnostics(client_id, params, command_id)
 			return true
 		"validate_scene":
 			_validate_scene(client_id, params, command_id)
@@ -68,7 +81,7 @@ func _get_script_diagnostics(client_id: int, params: Dictionary, command_id: Str
 	if script_path.is_empty():
 		return _send_error(client_id, "Script path cannot be empty", command_id)
 
-	var result := diagnose_script(script_path)
+	var result := await diagnose_script(script_path)
 	_send_success(client_id, result, command_id)
 
 
@@ -83,6 +96,10 @@ func _validate_scene(client_id: int, params: Dictionary, command_id: String) -> 
 
 
 # Parses a GDScript file and returns its compile/parse diagnostics.
+# Coroutine: callers must await it. The fast paths (empty path, .cs file,
+# missing file, cache hit, valid parse) never reach an await and therefore
+# still resolve synchronously; only the broken-script subprocess path
+# suspends while the worker thread runs.
 # Result shape:
 #   {
 #     "script_path": String,   # normalized res:// path
@@ -141,10 +158,10 @@ func diagnose_script(script_path: String) -> Dictionary:
 		# diagnostics.
 		return _build_diagnostics_result(normalized, true, true, [])
 
-	# The in-process parse failed. Spawn a headless child parser to recover
-	# the actual error messages and line numbers. The cache was already
-	# checked above, so there is no second lookup here.
-	var errors: Array = _run_parser_subprocess(normalized)
+	# The in-process parse failed. Spawn a headless child parser on a worker
+	# thread to recover the actual error messages and line numbers. The cache
+	# was already checked above, so there is no second lookup here.
+	var errors: Array = await _run_parser_subprocess_async(normalized)
 	if errors.is_empty():
 		errors = [{
 			"line": 0,
@@ -279,15 +296,61 @@ func _has_no_errors(issues: Array) -> bool:
 	return true
 
 
-# Runs a headless child Godot process with --check-only against the given
-# script and extracts the "SCRIPT ERROR: Parse Error: ..." blocks (message +
-# line number) from the captured output. Returns an Array of
-# {line, column, message} dictionaries. Column is not reported by the engine,
-# so it is always 0. Returns an empty Array when the child reports success.
-func _run_parser_subprocess(script_path: String) -> Array:
-	var executable := OS.get_executable_path()
+# Starts a worker thread that runs the headless child parser (OS.execute +
+# stderr parsing, data-only) and waits for it without blocking the main
+# thread. Returns the parsed errors Array (empty when the child reported
+# success or when the thread failed to start; the caller maps both to the
+# generic parse-error entry). The main thread never reads the holder while
+# the worker writes it: it polls Thread's thread-safe is_alive() and only
+# reads holder["errors"] after the thread has finished.
+func _run_parser_subprocess_async(script_path: String) -> Array:
+	var holder := {"errors": []}
 	var project_dir := ProjectSettings.globalize_path("res://")
+	var worker := Thread.new()
+	var start_error := worker.start(_run_parser_subprocess_worker.bind(script_path, project_dir, holder))
+	if start_error != OK:
+		return []
+	_active_parser_threads.append(worker)
 
+	while worker.is_alive():
+		# If teardown detached this processor before _exit_tree could reap the
+		# worker, take the safe synchronous path rather than awaiting a signal
+		# from a tree this node no longer belongs to.
+		if not is_inside_tree():
+			_reap_parser_thread(worker)
+			break
+		await get_tree().process_frame
+
+	# Normal completion owns the join only while the worker remains tracked.
+	# _exit_tree may already have joined and removed it while this coroutine
+	# was suspended, in which case the holder is complete and can be read.
+	_reap_parser_thread(worker)
+	return holder.get("errors", [])
+
+
+func _reap_parser_thread(worker: Thread) -> void:
+	if not _active_parser_threads.has(worker):
+		return
+	if worker.is_started():
+		worker.wait_to_finish()
+	_active_parser_threads.erase(worker)
+
+
+# Runs entirely on the worker thread. Data-only operations only: no scene
+# tree access, no Engine metadata, no signals, no await. The regexes are
+# compiled locally so the worker shares no mutable state with the main
+# thread. Runs a headless child Godot process with --check-only against the
+# given script and extracts the "SCRIPT ERROR: Parse Error: ..." blocks
+# (message + line number) from the captured output. Returns an Array of
+# {line, column, message} dictionaries. Column is not reported by the engine,
+# so it is always 0. An empty Array means the child reported success.
+static func _run_parser_subprocess_worker(script_path: String, project_dir: String, holder: Dictionary) -> void:
+	var error_regex := RegEx.new()
+	error_regex.compile("^SCRIPT ERROR: Parse Error: (.*)$")
+	var location_regex := RegEx.new()
+	location_regex.compile("^\\s*at:\\s+\\S+\\s+\\((.+?):(\\d+)\\)$")
+
+	var executable := OS.get_executable_path()
 	var output: Array[String] = []
 	var exit_code := OS.execute(executable, PackedStringArray([
 		"--headless",
@@ -296,39 +359,40 @@ func _run_parser_subprocess(script_path: String) -> Array:
 		"--script", script_path,
 	]), output, true)
 
+	var errors: Array = []
 	# The clean child process parsed the script successfully, which means
 	# the in-process failure came from stale editor state.
-	if exit_code == 0:
-		return []
+	if exit_code != 0:
+		# OS.execute appends the whole captured output as a single string with
+		# embedded newlines, so split it into lines (and strip Windows carriage
+		# returns) before matching.
+		var lines: Array = []
+		for chunk in output:
+			for raw_line in String(chunk).split("\n"):
+				lines.append(raw_line.trim_suffix("\r"))
 
-	# OS.execute appends the whole captured output as a single string with
-	# embedded newlines, so split it into lines (and strip Windows carriage
-	# returns) before matching.
-	var lines: Array = []
-	for chunk in output:
-		for raw_line in String(chunk).split("\n"):
-			lines.append(raw_line.trim_suffix("\r"))
+		for i in lines.size():
+			var message_match := error_regex.search(lines[i])
+			if message_match == null:
+				continue
+			var error_entry := {
+				"line": 0,
+				"column": 0,
+				"message": message_match.get_string(1).strip_edges()
+			}
+			# The location line ("at: ... (res://path.gd:LINE)") directly follows
+			# the message line; scan a few lines forward to find it.
+			for j in range(i + 1, mini(i + 4, lines.size())):
+				var location_match := location_regex.search(lines[j])
+				if location_match != null:
+					error_entry["line"] = int(location_match.get_string(2))
+					break
+			errors.append(error_entry)
 
-	var errors: Array = []
-	for i in lines.size():
-		var message_match := _parse_error_regex.search(lines[i])
-		if message_match == null:
-			continue
-		var error_entry := {
-			"line": 0,
-			"column": 0,
-			"message": message_match.get_string(1).strip_edges()
-		}
-		# The location line ("at: ... (res://path.gd:LINE)") directly follows
-		# the message line; scan a few lines forward to find it.
-		for j in range(i + 1, mini(i + 4, lines.size())):
-			var location_match := _parse_location_regex.search(lines[j])
-			if location_match != null:
-				error_entry["line"] = int(location_match.get_string(2))
-				break
-		errors.append(error_entry)
-
-	return errors
+	# Order matters: the errors array is fully written before the thread
+	# finishes; the main thread only reads the holder after is_alive()
+	# reports the thread has finished, so the writes are visible.
+	holder["errors"] = errors
 
 
 # Reports duplicate node names within the same parent. Godot 4 allows them,

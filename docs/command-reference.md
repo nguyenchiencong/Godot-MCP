@@ -216,7 +216,7 @@ Defaults: width 1280, height 720, transparent background off, output directory `
 }
 ```
 
-`valid` is true when the script parses without errors. `create_script` and `edit_script` responses also include this `diagnostics` field for GDScript files; pass `--diagnostics false` to skip the (potentially headless-subprocess) diagnostics run for faster writes.
+`valid` is true when the script parses without errors. `create_script` and `edit_script` responses also include this `diagnostics` field for GDScript files; pass `--diagnostics false` to skip the (potentially headless-subprocess) diagnostics run for faster writes. Diagnostics run on a worker thread so the editor stays responsive; results are cached per script content.
 
 ### validate_scene
 

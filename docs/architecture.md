@@ -48,9 +48,12 @@ Godot Engine APIs
 | `websocket_server.gd` | WebSocket server on port 9080 |
 | `command_handler.gd` | Routes commands to processors |
 | `commands/*.gd` | Command processors by category |
+| `commands/capture_commands.gd` | Scene capture (`capture_scene`) |
+| `commands/validation_commands.gd` | Script diagnostics and scene validation |
 | `mcp_debugger_bridge.gd` | EditorDebuggerPlugin for debugging |
 | `mcp_runtime_debugger_bridge.gd` | Runtime scene inspection |
 | `mcp_input_handler.gd` | Input simulation autoload |
+| `mcp_debug_output_publisher.gd` | Publishes editor Output-panel text to subscribers; signal-driven control resolution |
 | `runtime_debugger.gd` | Script injected into debugged projects |
 | `ui/mcp_panel.*` | Dock panel UI |
 
@@ -61,7 +64,18 @@ Godot Engine APIs
 - `debugger_commands.gd` - Debugger operations
 - `input_commands.gd` - Input simulation
 - `editor_commands.gd` - Editor state
-- `project_commands.gd` - Project info
+- `project_commands.gd` - Project info (tree scans use a single parameterized DFS walker)
+- `capture_commands.gd` - Scene capture
+- `validation_commands.gd` - Script diagnostics and scene validation
+- `mcp_enhanced_commands.gd` - Runtime inspection
+- `mcp_asset_commands.gd` - Asset operations
+- `mcp_script_resource_commands.gd` - Script and resource operations
+
+### Diagnostics & Feedback
+
+`get_script_diagnostics` (and the automatic diagnostics returned by `create_script`/`edit_script`) runs the headless `--check-only` parser on a worker thread, so broken scripts never block the editor main thread; results are cached per script content (bounded to 64 entries).
+
+The debug output publisher (`mcp_debug_output_publisher.gd`) caches the Output-panel control and its NodePath, recovers via `SceneTree` signals, and never scans the editor control tree during its 0.5s poll.
 
 ## Communication
 

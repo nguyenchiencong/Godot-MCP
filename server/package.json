@@ -19,6 +19,7 @@
     "test:all": "node tests/tools.test.js",
     "test:cli": "node tests/cli.test.js",
     "test:connection": "node tests/godot_connection.test.js",
+    "test:async-diagnostics": "node tests/async_diagnostics.test.js",
     "test:debugger": "node tests/debugger.test.js",
     "prepublishOnly": "npm run build && node -e \"require('fs').cpSync('../addons/godot_mcp','./addons/godot_mcp',{recursive:true});require('fs').cpSync('../README.md','./README.md')\"",
     "postpublish": "node -e \"require('fs').rmSync('./addons',{recursive:true,force:true});require('fs').rmSync('./README.md',{force:true})\""

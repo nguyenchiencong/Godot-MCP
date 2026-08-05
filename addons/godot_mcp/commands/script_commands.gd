@@ -19,10 +19,12 @@ func _init() -> void:
 	_signal_regex.compile("signal\\s+([a-zA-Z_][a-zA-Z0-9_]*)")
 
 func _exit_tree() -> void:
-	# Free the lazily-created validation processor (and its subprocess cache)
-	# when this processor leaves the tree, so no Node leak accumulates on
-	# shutdown. Session caching is preserved: the instance is only recreated
-	# lazily on the next diagnostics call while the editor session lives.
+	# Free the lazily-created validation processor Node when this processor
+	# leaves the tree, so no Node leak accumulates on shutdown. The shared
+	# subprocess cache lives in Engine metadata and stays process-wide; only
+	# the cached helper Node is freed. Session caching is preserved: the
+	# instance is only recreated lazily on the next diagnostics call while
+	# the editor session lives.
 	if _validation_commands != null:
 		_validation_commands.free()
 		_validation_commands = null
@@ -30,10 +32,10 @@ func _exit_tree() -> void:
 func process_command(client_id: int, command_type: String, params: Dictionary, command_id: String) -> bool:
 	match command_type:
 		"create_script":
-			_create_script(client_id, params, command_id)
+			await _create_script(client_id, params, command_id)
 			return true
 		"edit_script":
-			_edit_script(client_id, params, command_id)
+			await _edit_script(client_id, params, command_id)
 			return true
 		"get_script":
 			_get_script(client_id, params, command_id)
@@ -166,7 +168,7 @@ func _create_script(client_id: int, params: Dictionary, command_id: String) -> v
 		"node_path": node_path
 	}
 	if diagnostics and script_path.ends_with(".gd"):
-		result["diagnostics"] = _diagnose_script(script_path)
+		result["diagnostics"] = await _diagnose_script(script_path)
 	
 	_send_success(client_id, result, command_id)
 
@@ -206,7 +208,7 @@ func _edit_script(client_id: int, params: Dictionary, command_id: String) -> voi
 		"script_path": script_path
 	}
 	if diagnostics and script_path.ends_with(".gd"):
-		result["diagnostics"] = _diagnose_script(script_path)
+		result["diagnostics"] = await _diagnose_script(script_path)
 	
 	_send_success(client_id, result, command_id)
 
@@ -349,6 +351,9 @@ func _get_script_metadata(client_id: int, params: Dictionary, command_id: String
 # MCPValidationCommands after the editor rescans the filesystem, so a
 # parse-time class reference would break this file in fresh checkouts or
 # headless runs. Loading by path has no parse-time dependency.
+#
+# Coroutine: the subprocess-based diagnostics path awaits a worker thread,
+# so callers must await this function.
 func _diagnose_script(script_path: String) -> Dictionary:
 	if _validation_commands == null:
 		var validation_commands_script = load("res://addons/godot_mcp/commands/validation_commands.gd")
@@ -360,7 +365,12 @@ func _diagnose_script(script_path: String) -> Dictionary:
 				validation_commands.free()
 			return {"error": "Validation commands module does not provide diagnose_script"}
 		_validation_commands = validation_commands
-	return _validation_commands.diagnose_script(script_path)
+		# The cached instance is a Node that is not part of the scene tree by
+		# default, but its awaited diagnose_script coroutine needs get_tree()
+		# for the worker wait loop. Add it under this processor, which is
+		# itself in the editor tree; _exit_tree() keeps freeing it.
+		add_child(_validation_commands)
+	return await _validation_commands.diagnose_script(script_path)
 
 
 func _get_current_script(client_id: int, params: Dictionary, command_id: String) -> void:

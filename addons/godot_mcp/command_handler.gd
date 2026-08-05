@@ -162,6 +162,10 @@ func _processor_requires_await(processor: Node) -> bool:
 		return true
 	if processor is MCPCaptureCommands:
 		return true
+	if processor is MCPScriptCommands:
+		return true
+	if processor is MCPValidationCommands:
+		return true
 	if processor.get_script():
 		var path := String(processor.get_script().resource_path)
 		if path.ends_with("mcp_enhanced_commands.gd"):

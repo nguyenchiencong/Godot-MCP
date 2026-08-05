@@ -36,6 +36,49 @@ func process_command(client_id: int, command_type: String, params: Dictionary, c
 			return true
 	return false  # Command not handled
 
+# Walks the project tree in DFS order (directories are reported before recursing).
+# options:
+#   "skip_dirs":    Array[String] of directory names to skip entirely (default []).
+#   "extensions":   Array[String]; when non-empty, only files whose NAME ends with one
+#                   of these extensions are reported (empty = all files).
+#   "include_dirs": bool; when true, directories are reported too.
+# on_entry.call(entry_path, file_name, is_dir, extension) where entry_path is the full
+# "res://..." path ("res://dir/" for directories) and extension excludes the dot.
+# Returns false when dir_path could not be opened; failed subdirectory opens are skipped.
+func _walk_project_tree(dir_path: String, on_entry: Callable, options: Dictionary) -> bool:
+	var dir = DirAccess.open(dir_path)
+	if not dir:
+		return false
+
+	var skip_dirs: Array = options.get("skip_dirs", [])
+	var extensions: Array = options.get("extensions", [])
+	var include_dirs: bool = options.get("include_dirs", false)
+
+	dir.list_dir_begin()
+	var file_name = dir.get_next()
+
+	while file_name != "":
+		if dir.current_is_dir():
+			if file_name in skip_dirs:
+				file_name = dir.get_next()
+				continue
+			if include_dirs:
+				on_entry.call(dir_path + file_name + "/", file_name, true, "")
+			_walk_project_tree(dir_path + file_name + "/", on_entry, options)
+		else:
+			var has_valid_extension = extensions.is_empty()
+			for ext in extensions:
+				if file_name.ends_with(ext):
+					has_valid_extension = true
+					break
+			if has_valid_extension:
+				on_entry.call(dir_path + file_name, file_name, false, file_name.get_extension())
+
+		file_name = dir.get_next()
+
+	dir.list_dir_end()
+	return true
+
 func _get_project_info(client_id: int, _params: Dictionary, command_id: String) -> void:
 	var project_name = ProjectSettings.get_setting("application/config/name", "Untitled Project")
 	var project_version = ProjectSettings.get_setting("application/config/version", "1.0.0")
@@ -65,40 +108,15 @@ func _list_project_files(client_id: int, params: Dictionary, command_id: String)
 	var files = []
 	
 	# Get all files with the specified extensions
-	var dir = DirAccess.open("res://")
-	if dir:
-		_scan_directory(dir, "", extensions, files)
-	else:
+	if not _walk_project_tree("res://", _on_project_file_entry.bind(files), {"extensions": extensions}):
 		return _send_error(client_id, "Failed to open res:// directory", command_id)
 	
 	_send_success(client_id, {
 		"files": files
 	}, command_id)
 
-func _scan_directory(dir: DirAccess, path: String, extensions: Array, files: Array) -> void:
-	dir.list_dir_begin()
-	var file_name = dir.get_next()
-	
-	while file_name != "":
-		if dir.current_is_dir():
-			var subdir = DirAccess.open("res://" + path + file_name)
-			if subdir:
-				_scan_directory(subdir, path + file_name + "/", extensions, files)
-		else:
-			var file_path = path + file_name
-			var has_valid_extension = extensions.is_empty()
-			
-			for ext in extensions:
-				if file_name.ends_with(ext):
-					has_valid_extension = true
-					break
-			
-			if has_valid_extension:
-				files.append("res://" + file_path)
-		
-		file_name = dir.get_next()
-	
-	dir.list_dir_end()
+func _on_project_file_entry(entry_path: String, _file_name: String, _is_dir: bool, _extension: String, files: Array) -> void:
+	files.append(entry_path)
 
 func _get_project_structure(client_id: int, params: Dictionary, command_id: String) -> void:
 	var structure = {
@@ -107,38 +125,20 @@ func _get_project_structure(client_id: int, params: Dictionary, command_id: Stri
 		"total_files": 0
 	}
 	
-	var dir = DirAccess.open("res://")
-	if dir:
-		_analyze_project_structure(dir, "", structure)
-	else:
+	if not _walk_project_tree("res://", _on_structure_entry.bind(structure), {"include_dirs": true}):
 		return _send_error(client_id, "Failed to open res:// directory", command_id)
 	
 	_send_success(client_id, structure, command_id)
 
-func _analyze_project_structure(dir: DirAccess, path: String, structure: Dictionary) -> void:
-	dir.list_dir_begin()
-	var file_name = dir.get_next()
-	
-	while file_name != "":
-		if dir.current_is_dir():
-			var dir_path = path + file_name + "/"
-			structure["directories"].append("res://" + dir_path)
-			
-			var subdir = DirAccess.open("res://" + dir_path)
-			if subdir:
-				_analyze_project_structure(subdir, dir_path, structure)
+func _on_structure_entry(entry_path: String, _file_name: String, is_dir: bool, extension: String, structure: Dictionary) -> void:
+	if is_dir:
+		structure["directories"].append(entry_path)
+	else:
+		structure["total_files"] += 1
+		if extension in structure["file_counts"]:
+			structure["file_counts"][extension] += 1
 		else:
-			structure["total_files"] += 1
-			
-			var extension = file_name.get_extension()
-			if extension in structure["file_counts"]:
-				structure["file_counts"][extension] += 1
-			else:
-				structure["file_counts"][extension] = 1
-		
-		file_name = dir.get_next()
-	
-	dir.list_dir_end()
+			structure["file_counts"][extension] = 1
 
 func _get_project_settings(client_id: int, params: Dictionary, command_id: String) -> void:
 	# Get relevant project settings
@@ -184,43 +184,25 @@ func _list_project_resources(client_id: int, params: Dictionary, command_id: Str
 		"resources": []
 	}
 	
-	var dir = DirAccess.open("res://")
-	if dir:
-		_scan_resources(dir, "", resources)
-	else:
+	if not _walk_project_tree("res://", _on_resource_entry.bind(resources), {}):
 		return _send_error(client_id, "Failed to open res:// directory", command_id)
 	
 	_send_success(client_id, resources, command_id)
 
-func _scan_resources(dir: DirAccess, path: String, resources: Dictionary) -> void:
-	dir.list_dir_begin()
-	var file_name = dir.get_next()
-	
-	while file_name != "":
-		if dir.current_is_dir():
-			var subdir = DirAccess.open("res://" + path + file_name)
-			if subdir:
-				_scan_resources(subdir, path + file_name + "/", resources)
-		else:
-			var file_path = "res://" + path + file_name
-			
-			# Categorize by extension
-			if file_name.ends_with(".tscn") or file_name.ends_with(".scn"):
-				resources["scenes"].append(file_path)
-			elif file_name.ends_with(".gd") or file_name.ends_with(".cs"):
-				resources["scripts"].append(file_path)
-			elif file_name.ends_with(".png") or file_name.ends_with(".jpg") or file_name.ends_with(".jpeg"):
-				resources["textures"].append(file_path)
-			elif file_name.ends_with(".wav") or file_name.ends_with(".ogg") or file_name.ends_with(".mp3"):
-				resources["audio"].append(file_path)
-			elif file_name.ends_with(".obj") or file_name.ends_with(".glb") or file_name.ends_with(".gltf"):
-				resources["models"].append(file_path)
-			elif file_name.ends_with(".tres") or file_name.ends_with(".res"):
-				resources["resources"].append(file_path)
-		
-		file_name = dir.get_next()
-	
-	dir.list_dir_end()
+func _on_resource_entry(entry_path: String, file_name: String, _is_dir: bool, _extension: String, resources: Dictionary) -> void:
+	# Categorize by extension
+	if file_name.ends_with(".tscn") or file_name.ends_with(".scn"):
+		resources["scenes"].append(entry_path)
+	elif file_name.ends_with(".gd") or file_name.ends_with(".cs"):
+		resources["scripts"].append(entry_path)
+	elif file_name.ends_with(".png") or file_name.ends_with(".jpg") or file_name.ends_with(".jpeg"):
+		resources["textures"].append(entry_path)
+	elif file_name.ends_with(".wav") or file_name.ends_with(".ogg") or file_name.ends_with(".mp3"):
+		resources["audio"].append(entry_path)
+	elif file_name.ends_with(".obj") or file_name.ends_with(".glb") or file_name.ends_with(".gltf"):
+		resources["models"].append(entry_path)
+	elif file_name.ends_with(".tres") or file_name.ends_with(".res"):
+		resources["resources"].append(entry_path)
 
 func _run_project(client_id: int, _params: Dictionary, command_id: String) -> void:
 	var editor_interface = _get_editor_interface()
@@ -411,40 +393,21 @@ func _collect_scene_inventory(autoloads: Array) -> Dictionary:
 	for autoload in autoloads:
 		autoload_script_paths.append(autoload["path"])
 
-	var dir = DirAccess.open("res://")
-	if dir:
-		_scan_project_files(dir, "", scenes, key_scripts, autoload_script_paths)
+	_walk_project_tree("res://", _on_guidance_entry.bind(scenes, key_scripts, autoload_script_paths), {"skip_dirs": ["addons", ".godot", ".git"]})
 
 	return {
 		"scenes": scenes,
 		"key_scripts": key_scripts
 	}
 
-func _scan_project_files(dir: DirAccess, path: String, scenes: Array, key_scripts: Array, autoload_script_paths: Array) -> void:
-	dir.list_dir_begin()
-	var file_name = dir.get_next()
-
-	while file_name != "":
-		if dir.current_is_dir():
-			if file_name == "addons" or file_name == ".godot" or file_name == ".git":
-				file_name = dir.get_next()
-				continue
-			var subdir = DirAccess.open("res://" + path + file_name)
-			if subdir:
-				_scan_project_files(subdir, path + file_name + "/", scenes, key_scripts, autoload_script_paths)
-		else:
-			var file_path: String = "res://" + path + file_name
-			if file_name.ends_with(".tscn") or file_name.ends_with(".scn"):
-				scenes.append(file_path)
-			elif file_name.ends_with(".gd"):
-				if autoload_script_paths.has(file_path) or _is_key_script(file_path):
-					key_scripts.append(file_path)
-			elif file_name.ends_with(".cs"):
-				key_scripts.append(file_path)
-
-		file_name = dir.get_next()
-
-	dir.list_dir_end()
+func _on_guidance_entry(entry_path: String, file_name: String, _is_dir: bool, _extension: String, scenes: Array, key_scripts: Array, autoload_script_paths: Array) -> void:
+	if file_name.ends_with(".tscn") or file_name.ends_with(".scn"):
+		scenes.append(entry_path)
+	elif file_name.ends_with(".gd"):
+		if autoload_script_paths.has(entry_path) or _is_key_script(entry_path):
+			key_scripts.append(entry_path)
+	elif file_name.ends_with(".cs"):
+		key_scripts.append(entry_path)
 
 func _is_key_script(path: String) -> bool:
 	var file = FileAccess.open(path, FileAccess.READ)
