@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.0.10 - 2026-08-05
+
+### Added
+- `get_node_warnings` tool/command to inspect configuration warnings ([!] badges) on nodes in the current scene tree
+
 ## 1.0.9 - 2025-12-19
 
 ### Changed
