@@ -26,6 +26,20 @@ Use this document to craft effective prompts when instructing an LLM to interact
 
 ---
 
+## Shader Tools
+
+| Tool | Purpose | Parameters | Example Prompt |
+|------|---------|------------|----------------|
+| `create_shader` | Create a new .gdshader file; generates a template from `shader_type` when content is omitted, then reports editor compile diagnostics. Provide `shader_type` or explicit `content`. | `script_path` (string), `shader_type` (optional string: `canvas_item`, `spatial`, `particles`, `sky`, `fog`), `content` (optional string) | “Create a `canvas_item` shader at `res://shaders/outline.gdshader` that tints sprites red.” |
+| `edit_shader` | Edit a .gdshader file and report editor compile diagnostics (parse errors with line numbers). | `script_path` (string), `content` (string) | “Fix the compile error in `res://shaders/outline.gdshader` — rewrite the fragment function.” |
+| `get_shader` | Fetch the source of a .gdshader file. | `script_path` (string) | “Show me the current contents of `res://shaders/water.gdshader`.” |
+| `shader_get_compile_errors` | Read shader compile errors retained by the editor logger; `wait_ms` delays the read (default 0, maximum 10000). | `script_path` (optional string), `wait_ms` (optional int) | “Wait half a second, then show me any shader compile errors captured for `res://shaders/water.gdshader`.” |
+| `shader_list_materials` | List ShaderMaterials used by nodes in the **running game** (needs the game running from the editor with the debugger attached). Reports node path, material path (res:// or "local"), shader path, slot, and sharing metadata. | `node_path` (optional string, subtree root), `material_slot` (optional string), `wait_ms` (optional int) | “Which ShaderMaterials are on the sprites under `/root/TestMainScene/ShaderVisuals` right now?” |
+| `shader_get_uniforms` | Read a node's shader uniforms in the **running game**: live values merged with type/hint/default metadata parsed from the shader source. | `node_path` (string, required), `material_slot` (optional string), `wait_ms` (optional int) | “Show me the current uniforms of the material on `/root/TestMainScene/ShaderVisuals/SoloSprite`.” |
+| `shader_set_uniform` | Set a shader uniform in the **running game**. Refuses materials shared by more than one node unless `allow_shared=true`. Vector/color/transform arrays must have the exact declared length; texture paths must stay under `res://`. | `node_path` (string), `uniform_name` (string), `value` (number, bool, vector/color dict or array, res:// texture string, transform array, or uniform array), `material_slot` (optional string), `allow_shared` (optional bool), `wait_ms` (optional int, default 800, maximum 60000) | “Set the `speed` uniform on `/root/TestMainScene/ShaderVisuals/SoloSprite` to 3.5.” |
+
+---
+
 ## Scene Tools
 
 | Tool | Purpose | Parameters | Example Prompt |

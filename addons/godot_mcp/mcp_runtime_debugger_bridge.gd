@@ -5,6 +5,7 @@ extends EditorDebuggerPlugin
 signal scene_tree_updated(session_id: int)
 signal runtime_eval_completed(session_id: int, request_id: int)
 signal input_result_received(session_id: int, request_id: int)
+signal shader_result_received(session_id: int, request_id: int)
 
 const CAPTURE_SCENE := "scene"
 const VIEW_HAS_VISIBLE_METHOD := 1 << 1
@@ -15,13 +16,25 @@ const DEFAULT_EVAL_TIMEOUT_MS := 800
 const SCENE_CAPTURE_NAMES := ["scene", "limboai"]
 const EVAL_CAPTURE_NAME := "mcp_eval"
 const INPUT_CAPTURE_NAME := "mcp_input"
+const SHADER_CAPTURE_NAME := "mcp_shader"
+
+# Bounds for the per-session pending-result stores: a session that is never
+# polled (e.g. requests that timed out) must not grow without limit, so the
+# oldest entries are evicted while a store exceeds this cap.
+const MAX_PENDING_RESULTS := 64
+# Results older than this when taken are treated as stale late replies for an
+# already-abandoned request and evicted instead of returned. Chosen far above
+# the longest legitimate poll window (60 s for shader requests).
+const PENDING_RESULT_MAX_AGE_MS := 120000
 
 var _sessions: Dictionary = {}
 var _next_eval_request_id: int = 1
+var _next_shader_request_id: int = 1
 
 func _init() -> void:
 	_sessions.clear()
 	_next_eval_request_id = 1
+	_next_shader_request_id = 1
 
 func _setup_session(session_id: int) -> void:
 	_trace("setup_session %s" % session_id)
@@ -43,6 +56,8 @@ func _has_capture(capture: String) -> bool:
 			return true
 	if capture == INPUT_CAPTURE_NAME or capture.begins_with(INPUT_CAPTURE_NAME + ":"):
 		return true
+	if capture == SHADER_CAPTURE_NAME or capture.begins_with(SHADER_CAPTURE_NAME + ":"):
+		return true
 	return false
 
 func _capture(message: String, data: Array, session_id: int) -> bool:
@@ -62,6 +77,10 @@ func _capture(message: String, data: Array, session_id: int) -> bool:
 	elif normalized == "%s:result" % INPUT_CAPTURE_NAME:
 		_trace("received input result for session %s" % session_id)
 		_store_input_result(session_id, data)
+		return true
+	elif normalized == "%s:result" % SHADER_CAPTURE_NAME:
+		_trace("received shader result for session %s" % session_id)
+		_store_shader_result(session_id, data)
 		return true
 	return false
 
@@ -237,6 +256,7 @@ func _store_eval_result(session_id: int, payload: Array) -> void:
 	var state: Dictionary = _sessions.get(session_id, {})
 	var results: Dictionary = state.get("eval_results", {})
 	results[request_id] = result_dict
+	_cap_result_store(results)
 	state["eval_results"] = results
 	_sessions[session_id] = state
 
@@ -360,8 +380,17 @@ func _ensure_session(session_id: int) -> void:
 			"last_update": 0,
 			"active": false,
 			"eval_results": {},
-			"input_results": {}
+			"input_results": {},
+			"shader_results": {}
 		}
+
+# Keeps a pending-result store bounded: evicts the oldest entries while the
+# store exceeds MAX_PENDING_RESULTS. Dictionaries preserve insertion order,
+# so the first key is the oldest entry. Cap only on insert; an entry a caller
+# is actively polling is only evicted once the store exceeds the cap.
+func _cap_result_store(results: Dictionary) -> void:
+	while results.size() > MAX_PENDING_RESULTS:
+		results.erase(results.keys()[0])
 
 func _on_session_started(session_id: int) -> void:
 	_ensure_session(session_id)
@@ -374,6 +403,9 @@ func _on_session_stopped(session_id: int) -> void:
 	_ensure_session(session_id)
 	var state: Dictionary = _sessions[session_id]
 	state["active"] = false
+	# Replies are scoped to one debugger session lifetime. Discard them on
+	# teardown so stopped games cannot leave stale shader payloads behind.
+	state["shader_results"] = {}
 	_sessions[session_id] = state
 	_trace("session %s stopped" % session_id)
 
@@ -398,6 +430,9 @@ func _normalize_capture_name(message: String) -> String:
 	if message.begins_with("%s:" % INPUT_CAPTURE_NAME):
 		var input_suffix := message.substr(INPUT_CAPTURE_NAME.length() + 1)
 		return "%s:%s" % [INPUT_CAPTURE_NAME, input_suffix]
+	if message.begins_with("%s:" % SHADER_CAPTURE_NAME):
+		var shader_suffix := message.substr(SHADER_CAPTURE_NAME.length() + 1)
+		return "%s:%s" % [SHADER_CAPTURE_NAME, shader_suffix]
 	if message.ends_with(":scene_tree"):
 		return "scene:scene_tree"
 	return message
@@ -462,3 +497,109 @@ func take_input_result(session_id: int, request_id: int) -> Dictionary:
 		if response.has("_received_at"):
 			response.erase("_received_at")
 	return response
+
+# ---------------------------------------------------------------------------
+# Shader runtime request/result handling (Phase B)
+#
+# Sends "mcp_shader:<action>" messages to the running game and correlates
+# "mcp_shader:result" replies by request id, mirroring the eval flow
+# (evaluate_runtime_expression / _store_eval_result / take_eval_result).
+# ---------------------------------------------------------------------------
+
+func send_shader_request(action: String, args: Array = []) -> Dictionary:
+	var active_sessions := _get_active_session_ids()
+	_trace("active sessions: %s" % active_sessions)
+	if active_sessions.is_empty():
+		return { "error": "No active runtime session. Start the project or attach the debugger first." }
+
+	var session_id: int = active_sessions[0]
+	_ensure_session(session_id)
+	var session := get_session(session_id)
+	if session == null or not session.is_active():
+		return { "error": "Runtime debugger session is not active." }
+
+	var request_id: int = _next_shader_request_id
+	_next_shader_request_id += 1
+
+	var payload := Array()
+	payload.append(request_id)
+	for item in args:
+		payload.append(item)
+
+	_trace("sending shader request %s (%s) to session %s" % [request_id, action, session_id])
+	session.send_message("%s:%s" % [SHADER_CAPTURE_NAME, action], payload)
+
+	return {
+		"session_id": session_id,
+		"request_id": request_id
+	}
+
+func has_shader_result(session_id: int, request_id: int) -> bool:
+	if not _sessions.has(session_id):
+		return false
+	var state: Dictionary = _sessions[session_id]
+	var results: Dictionary = state.get("shader_results", {})
+	return results.has(request_id)
+
+func take_shader_result(session_id: int, request_id: int) -> Dictionary:
+	if not _sessions.has(session_id):
+		return {}
+	var state: Dictionary = _sessions[session_id]
+	var results: Dictionary = state.get("shader_results", {})
+	if not results.has(request_id):
+		return {}
+	var payload: Variant = results[request_id]
+	# A result that has sat in the store far beyond any legitimate poll window
+	# is a stale late reply for an already-abandoned request: evict it rather
+	# than returning it to a caller.
+	if typeof(payload) == TYPE_DICTIONARY and Time.get_ticks_msec() - int(payload.get("_received_at", 0)) > PENDING_RESULT_MAX_AGE_MS:
+		results.erase(request_id)
+		state["shader_results"] = results
+		_sessions[session_id] = state
+		return {}
+	results.erase(request_id)
+	state["shader_results"] = results
+	_sessions[session_id] = state
+
+	var response := {}
+	if typeof(payload) == TYPE_DICTIONARY:
+		response = payload.duplicate(true)
+		if response.has("_received_at"):
+			response.erase("_received_at")
+	return response
+
+# Removes any pending result for a request that will no longer be polled
+# (e.g. after a send timeout), so a late reply cannot linger in the store.
+func discard_shader_result(session_id: int, request_id: int) -> void:
+	if not _sessions.has(session_id):
+		return
+	var state: Dictionary = _sessions[session_id]
+	var results: Dictionary = state.get("shader_results", {})
+	if results.has(request_id):
+		results.erase(request_id)
+		state["shader_results"] = results
+		_sessions[session_id] = state
+
+func _store_shader_result(session_id: int, payload: Array) -> void:
+	_ensure_session(session_id)
+	if payload.size() < 2:
+		_trace("shader result payload malformed (size=%s)" % payload.size())
+		return
+
+	var request_id := int(payload[0])
+	var entry: Variant = payload[1]
+	if typeof(entry) != TYPE_DICTIONARY:
+		_trace("shader result payload not dictionary")
+		return
+
+	var result_dict: Dictionary = entry.duplicate(true)
+	result_dict["_received_at"] = Time.get_ticks_msec()
+
+	var state: Dictionary = _sessions.get(session_id, {})
+	var results: Dictionary = state.get("shader_results", {})
+	results[request_id] = result_dict
+	_cap_result_store(results)
+	state["shader_results"] = results
+	_sessions[session_id] = state
+
+	shader_result_received.emit(session_id, request_id)

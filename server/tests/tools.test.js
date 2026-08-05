@@ -15,7 +15,7 @@
  * Options:
  *   --help, -h       Show help
  *   --verbose, -v    Verbose output
- *   --category=X     Run only specific category (node, script, scene, project, editor, asset, debugger, input, enhanced)
+ *   --category=X     Run only specific category (node, script, shader, scene, project, editor, asset, debugger, input, enhanced)
  *   --tool=X         Run only specific tool by name
  *   --skip-runtime   Skip tests that require a running game
  */
@@ -46,6 +46,7 @@ import { enhancedTools } from '../dist/tools/enhanced_tools.js';
 import { scriptResourceTools } from '../dist/tools/script_resource_tools.js';
 import { captureTools } from '../dist/tools/capture_tools.js';
 import { diagnosticsTools } from '../dist/tools/diagnostics_tools.js';
+import { shaderTools } from '../dist/tools/shader_tools.js';
 
 import { writeFileSync, rmSync } from 'fs';
 import path from 'path';
@@ -65,6 +66,7 @@ const testTimestamp = Date.now();
 const TEST_SCENE_PATH = `res://test_mcp_scene_${testTimestamp}.tscn`;
 const TEST_SCRIPT_PATH = `res://test_mcp_script_${testTimestamp}.gd`;
 const TEST_RESOURCE_PATH = `res://test_mcp_resource_${testTimestamp}.tres`;
+const TEST_SHADER_PATH = `res://test_mcp_shader_${testTimestamp}.gdshader`;
 
 // Godot project root (tests/ -> server/ -> project root)
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -79,7 +81,7 @@ if (args.includes('--help') || args.includes('-h')) {
 	log('  --help, -h       Show this help message');
 	log('  --verbose, -v    Enable verbose logging');
 	log('  --category=X     Run only specific category');
-	log('                   (node, script, scene, project, editor, asset, debugger, input, enhanced)');
+	log('                   (node, script, shader, scene, project, editor, asset, debugger, input, enhanced)');
 	log('  --tool=X         Run only specific tool by name');
 	log('  --skip-runtime   Skip tests requiring running game');
 	log('');
@@ -106,6 +108,7 @@ const allTools = [
 	...scriptResourceTools,
 	...captureTools,
 	...diagnosticsTools,
+	...shaderTools,
 ];
 
 const toolMap = new Map(allTools.map(t => [t.name, t]));
@@ -217,6 +220,255 @@ print("Cleaned up test script: ${scriptPath}")
 					rmSync(path.join(PROJECT_ROOT, `test_mcp_broken_${testTimestamp}.gd`), { force: true });
 					rmSync(path.join(PROJECT_ROOT, `test_mcp_broken_${testTimestamp}.gd.uid`), { force: true });
 				}
+			}
+		]
+	},
+	shader: {
+		name: 'Shader Tools',
+		tests: [
+			{
+				tool: 'create_shader',
+				get params() {
+					return { script_path: TEST_SHADER_PATH, shader_type: 'canvas_item' };
+				},
+				validate: (result) => result.includes('Created') && result.includes('no shader compile errors')
+			},
+			{
+				tool: 'edit_shader',
+				get params() {
+					return { script_path: TEST_SHADER_PATH, content: '' };
+				},
+				validate: (result) => result.includes('Updated shader')
+			},
+			{
+				tool: 'edit_shader',
+				get params() {
+					// Valid content: recovery after the deliberately empty edit above
+					return {
+						script_path: TEST_SHADER_PATH,
+						content: 'shader_type canvas_item;\n\nvoid fragment() {\n\tCOLOR = vec4(0.2, 0.4, 0.8, 1.0);\n}\n'
+					};
+				},
+				validate: (result) => result.includes('Updated') && result.includes('no shader compile errors')
+			},
+			{
+				tool: 'edit_shader',
+				get params() {
+					// Deliberately invalid: exercises the editor compile-error diagnostics path
+					return {
+						script_path: TEST_SHADER_PATH,
+						content: 'shader_type canvas_item;\n\nvoid fragment() {\n\tCOLOR = vec4(1.0;\n}\n'
+					};
+				},
+				validate: (result) => result.includes('Updated') && (result.includes('issue') || result.includes('line'))
+			},
+			{
+				tool: 'shader_get_compile_errors',
+				get params() {
+					// The invalid edit above should have left a captured shader compile error.
+					// A short wait also exercises the bounded wait path.
+					return { script_path: TEST_SHADER_PATH, wait_ms: 10 };
+				},
+				validate: (result) => result.includes('issue(s):') && result.includes('[error at')
+			},
+			{
+				tool: 'get_shader',
+				get params() {
+					return { script_path: TEST_SHADER_PATH };
+				},
+				validate: (result) => result.includes('shader_type canvas_item'),
+				cleanup: async () => {
+					const tool = toolMap.get('execute_editor_script');
+					if (tool) {
+						try {
+							await tool.execute({
+								code: `
+var dir = DirAccess.open("res://")
+if dir:
+	dir.remove("${TEST_SHADER_PATH}")
+	dir.remove("${TEST_SHADER_PATH}.uid")
+print("Cleaned up test shader: ${TEST_SHADER_PATH}")
+`
+							});
+						} catch (e) {
+							// Ignore cleanup errors
+						}
+					}
+				}
+			},
+			// Runtime shader tools (Phase B): target the RUNNING game, so they are
+			// gated like the debugger/input runtime tests. Use --skip-runtime when
+			// no game is attached; otherwise success cases must not accept errors.
+			// When it is running (F5 from the editor), the scene must contain the
+			// ShaderVisuals nodes from test_main_scene.tscn for the assertions.
+			{
+				tool: 'shader_list_materials',
+				get params() {
+					return { node_path: '/root/TestMainScene' };
+				},
+				validate: (result) => result.includes('Found 3 ShaderMaterial(s):')
+					&& result.includes('/root/TestMainScene/ShaderVisuals/SharedSpriteA')
+					&& result.includes('/root/TestMainScene/ShaderVisuals/SharedSpriteB')
+					&& result.includes('/root/TestMainScene/ShaderVisuals/SoloSprite')
+					&& result.includes('material: res://test_runtime_material.tres')
+					&& result.includes('material: res://test_main_scene.tscn::ShaderMaterial_shared')
+					&& result.includes('shader: res://test_runtime_material.gdshader')
+					&& result.includes('sharing: 2 user(s)'),
+				requiresRuntime: true
+			},
+			{
+				tool: 'shader_get_uniforms',
+				get params() {
+					return { node_path: '/root/TestMainScene/ShaderVisuals/SharedSpriteA', material_slot: 'material' };
+				},
+				validate: (result) => result.includes('Shader: res://test_runtime_material.gdshader on /root/TestMainScene/ShaderVisuals/SharedSpriteA (slot: material)')
+					&& result.includes('Uniforms (9):')
+					&& result.includes('- speed (float)')
+					&& result.includes('- tint (color)')
+					&& result.includes('- offset (vec2)'),
+				requiresRuntime: true
+			},
+			{
+				tool: 'shader_set_uniform',
+				get params() {
+					return { node_path: '/root/TestMainScene/ShaderVisuals/SoloSprite', uniform_name: 'speed', value: 3.5 };
+				},
+				validate: (result) => result.includes("Set uniform 'speed' on /root/TestMainScene/ShaderVisuals/SoloSprite (slot: material)")
+					&& result.includes('new: 3.5')
+					&& result.includes('sharing: 1 user(s)'),
+				requiresRuntime: true
+			},
+			// Shared-material refusal: SharedSpriteA and SharedSpriteB share one
+			// ShaderMaterial sub-resource, so without allow_shared the game must
+			// refuse the write with an error that names the sharing.
+			{
+				tool: 'shader_set_uniform',
+				get params() {
+					return { node_path: '/root/TestMainScene/ShaderVisuals/SharedSpriteA', uniform_name: 'speed', value: 2.5 };
+				},
+				validate: (result) => true,
+				requiresRuntime: true,
+				expectError: true,
+				expectErrorContains: 'is shared by 2 nodes'
+			},
+			// The same write with allow_shared=true must succeed and report both users.
+			{
+				tool: 'shader_set_uniform',
+				get params() {
+					return { node_path: '/root/TestMainScene/ShaderVisuals/SharedSpriteA', uniform_name: 'speed', value: 2.5, allow_shared: true };
+				},
+				validate: (result) => result.includes("Set uniform 'speed' on /root/TestMainScene/ShaderVisuals/SharedSpriteA")
+					&& result.includes('new: 2.5')
+					&& result.includes('sharing: 2 user(s)'),
+				requiresRuntime: true
+			},
+			// Unknown uniform names must be rejected by the running game.
+			{
+				tool: 'shader_set_uniform',
+				get params() {
+					return { node_path: '/root/TestMainScene/ShaderVisuals/SoloSprite', uniform_name: 'missing_uniform', value: 1.0 };
+				},
+				validate: (result) => true,
+				requiresRuntime: true,
+				expectError: true,
+				expectErrorContains: "Unknown uniform 'missing_uniform'"
+			},
+			// Scalar strings must not be silently coerced to zero.
+			{
+				tool: 'shader_set_uniform',
+				get params() {
+					return { node_path: '/root/TestMainScene/ShaderVisuals/SoloSprite', uniform_name: 'speed', value: 'not-a-number' };
+				},
+				validate: (result) => true,
+				requiresRuntime: true,
+				expectError: true,
+				expectErrorContains: "not valid for uniform type 'float'"
+			},
+			// Texture paths are restricted to project resources.
+			{
+				tool: 'shader_set_uniform',
+				get params() {
+					return { node_path: '/root/TestMainScene/ShaderVisuals/SoloSprite', uniform_name: 'albedo_tex', value: 'user://outside.png' };
+				},
+				validate: (result) => true,
+				requiresRuntime: true,
+				expectError: true,
+				expectErrorContains: 'Texture path must stay inside res://'
+			},
+			// Fixed-size arrays must round-trip and reject the wrong element count.
+			{
+				tool: 'shader_set_uniform',
+				get params() {
+					return { node_path: '/root/TestMainScene/ShaderVisuals/SoloSprite', uniform_name: 'weights', value: [0.125, 0.25, 0.5] };
+				},
+				validate: (result) => result.includes("Set uniform 'weights' on /root/TestMainScene/ShaderVisuals/SoloSprite")
+					&& result.includes('new: [0.125,0.25,0.5]'),
+				requiresRuntime: true
+			},
+			{
+				tool: 'shader_set_uniform',
+				get params() {
+					return { node_path: '/root/TestMainScene/ShaderVisuals/SoloSprite', uniform_name: 'weights', value: [1, 2] };
+				},
+				validate: (result) => true,
+				requiresRuntime: true,
+				expectError: true,
+				expectErrorContains: 'Expected exactly 3 array values, received 2'
+			},
+			// Color round-trip: set a color uniform, then re-read it via get_uniforms.
+			// Binary-exact components (0.5/0.25/0.125) keep the JSON assertion stable.
+			{
+				tool: 'shader_set_uniform',
+				get params() {
+					return { node_path: '/root/TestMainScene/ShaderVisuals/SoloSprite', uniform_name: 'tint', value: { r: 0.5, g: 0.25, b: 0.125, a: 1 } };
+				},
+				validate: (result) => {
+					// Color dict keys may be reordered by the debugger round-trip,
+					// so parse the JSON and compare components by name.
+					const match = result.match(/new: (\{[^{}]*\})/);
+					if (!match) {
+						return false;
+					}
+					try {
+						const value = JSON.parse(match[1]);
+						return value.r === 0.5 && value.g === 0.25 && value.b === 0.125 && value.a === 1;
+					} catch (e) {
+						return false;
+					}
+				},
+				requiresRuntime: true
+			},
+			// Vec2 round-trip: set a vec2 uniform, then re-read it via get_uniforms.
+			{
+				tool: 'shader_set_uniform',
+				get params() {
+					return { node_path: '/root/TestMainScene/ShaderVisuals/SoloSprite', uniform_name: 'offset', value: [0.5, 0.25] };
+				},
+				validate: (result) => result.includes("Set uniform 'offset' on /root/TestMainScene/ShaderVisuals/SoloSprite")
+					&& result.includes('new: [0.5,0.25]'),
+				requiresRuntime: true
+			},
+			{
+				tool: 'shader_get_uniforms',
+				get params() {
+					return { node_path: '/root/TestMainScene/ShaderVisuals/SoloSprite', material_slot: 'material' };
+				},
+				validate: (result) => {
+					const tintMatch = result.match(/tint \(color\) value=(\{[^{}]*\})/);
+					const offsetMatch = result.match(/offset \(vec2\) value=(\[[0-9.,\- ]+\])/);
+					if (!tintMatch || !offsetMatch) {
+						return false;
+					}
+					try {
+						const tint = JSON.parse(tintMatch[1]);
+						const offset = JSON.parse(offsetMatch[1]);
+						return tint.r === 0.5 && tint.g === 0.25 && tint.b === 0.125 && tint.a === 1
+							&& offset.length === 2 && offset[0] === 0.5 && offset[1] === 0.25;
+					} catch (e) {
+						return false;
+					}
+				},
+				requiresRuntime: true
 			}
 		]
 	},
@@ -705,6 +957,12 @@ async function runToolTest(categoryName, test) {
 		
 	} catch (error) {
 		if (test.expectError) {
+			if (test.expectErrorContains && !error.message.includes(test.expectErrorContains)) {
+				log(`  [FAIL] ${toolName}: Expected error containing "${test.expectErrorContains}" but got: ${error.message}`, 'red');
+				results.failed++;
+				results.errors.push({ tool: toolName, error: `Expected error containing "${test.expectErrorContains}"`, result: error.message });
+				return { tool: toolName, status: 'failed', error: error.message };
+			}
 			// Expected error - this is a pass
 			log(`  [PASS] ${toolName} (expected error: ${error.message.substring(0, 50)})`, 'green');
 			results.passed++;

@@ -1,0 +1,13 @@
+[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+
+[ext_resource type="Shader" path="res://test_runtime_material.gdshader" id="1_sdr"]
+
+[resource]
+shader = ExtResource("1_sdr")
+shader_parameter/speed = 4.0
+shader_parameter/steps = 8
+shader_parameter/glow = false
+shader_parameter/offset = Vector2(0.25, 0.75)
+shader_parameter/scale_3d = Vector3(1.0, 2.0, 0.5)
+shader_parameter/tint = Color(0.2, 0.8, 0.4, 1)
+shader_parameter/weights = PackedFloat32Array(0.5, 0.6, 0.7)

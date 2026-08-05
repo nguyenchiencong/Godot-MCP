@@ -12,6 +12,7 @@ import { projectTools } from './tools/project_tools.js';
 import { inputTools } from './tools/input_tools.js';
 import { captureTools } from './tools/capture_tools.js';
 import { diagnosticsTools } from './tools/diagnostics_tools.js';
+import { shaderTools } from './tools/shader_tools.js';
 import { getGodotConnection } from './utils/godot_connection.js';
 
 // Import resources
@@ -69,7 +70,8 @@ async function main() {
     ...debuggerTools,
     ...inputTools,
     ...captureTools,
-    ...diagnosticsTools
+    ...diagnosticsTools,
+    ...shaderTools
   ];
 
   allTools.forEach(tool => {

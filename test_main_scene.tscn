@@ -1,9 +1,22 @@
-[gd_scene load_steps=3 format=3 uid="uid://bqxnyxqvxj8vr"]
+[gd_scene load_steps=6 format=3 uid="uid://bqxnyxqvxj8vr"]
 
 [ext_resource type="Script" uid="uid://bc76nus88fknp" path="res://test_debugger.gd" id="1_0k8xr"]
+[ext_resource type="Shader" uid="uid://8qbi8qnk7r76" path="res://test_runtime_material.gdshader" id="2_sdr"]
+[ext_resource type="Material" path="res://test_runtime_material.tres" id="3_mtrl"]
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_1x8xr"]
 size = Vector2(80, 80)
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_shared"]
+shader = ExtResource("2_sdr")
+shader_parameter/speed = 2.0
+shader_parameter/steps = 8
+shader_parameter/glow = true
+shader_parameter/offset = Vector2(0.25, 0.75)
+shader_parameter/scale_3d = Vector3(1, 2, 0.5)
+shader_parameter/tint = Color(1, 0.5, 0.25, 1)
+shader_parameter/weights = PackedFloat32Array(0.1, 0.2, 0.3)
+shader_parameter/anchors = PackedVector2Array(0, 0, 0, 0)
 
 [node name="TestMainScene" type="Node"]
 editor_description = "Test"
@@ -72,5 +85,16 @@ shape = SubResource("RectangleShape2D_1x8xr")
 [node name="Grandchild" type="Node" parent="TestNode/Child1"]
 
 [node name="Child2" type="Node" parent="TestNode"]
+
+[node name="ShaderVisuals" type="Node2D" parent="."]
+
+[node name="SharedSpriteA" type="Sprite2D" parent="ShaderVisuals"]
+material = SubResource("ShaderMaterial_shared")
+
+[node name="SharedSpriteB" type="Sprite2D" parent="ShaderVisuals"]
+material = SubResource("ShaderMaterial_shared")
+
+[node name="SoloSprite" type="Sprite2D" parent="ShaderVisuals"]
+material = ExtResource("3_mtrl")
 
 [node name="@Node2D@22082" type="Node2D" parent="."]

@@ -7,13 +7,18 @@ var panel = null  # Reference to the MCP panel
 var runtime_debugger_bridge = null  # Runtime scene inspection bridge
 var debugger_bridge = null  # Debugger control bridge
 var debug_output_publisher = null  # Live debug output broadcaster
+var shader_error_logger = null  # Shader compile error capture (MCPShaderErrorLogger)
 var _runtime_bridge_warning_logged := false
 var _debugger_bridge_warning_logged := false
-const SCENE_CAPTURE_NAMES := ["scene", "limboai", "mcp_eval", "mcp_input"]
+var _input_handler_autoload_added := false
+var _shader_runtime_autoload_added := false
+const SCENE_CAPTURE_NAMES := ["scene", "limboai", "mcp_eval", "mcp_input", "mcp_shader"]
 const STACK_CAPTURE_NAMES := ["stack", "call_stack", "callstack"]
 
 const INPUT_HANDLER_AUTOLOAD_NAME := "MCPInputHandler"
 const INPUT_HANDLER_SCRIPT_PATH := "res://addons/godot_mcp/mcp_input_handler.gd"
+const SHADER_RUNTIME_AUTOLOAD_NAME := "MCPShaderRuntime"
+const SHADER_RUNTIME_SCRIPT_PATH := "res://addons/godot_mcp/mcp_shader_runtime.gd"
 
 func _enter_tree():
 	# Store plugin instance for EditorInterface access
@@ -23,6 +28,8 @@ func _enter_tree():
 	_try_register_runtime_bridge()
 	_try_register_debugger_bridge()
 	_register_input_handler_autoload()
+	_register_shader_runtime_autoload()
+	_install_shader_error_logger()
 
 	print("\n=== MCP SERVER STARTING ===")
 
@@ -96,6 +103,8 @@ func _start_server_with_improved_timing(attempt: int = 0):
 			printerr("Please use the 'Start' button in the MCP Server panel at the bottom of the editor")
 
 func _exit_tree():
+	_uninstall_shader_error_logger()
+
 	# Remove plugin instance from Engine metadata
 	if Engine.has_meta("GodotMCPPlugin"):
 		Engine.remove_meta("GodotMCPPlugin")
@@ -107,6 +116,7 @@ func _exit_tree():
 		Engine.remove_meta("MCPDebugOutputPublisher")
 	_update_debugger_captures(false)
 	_remove_input_handler_autoload()
+	_remove_shader_runtime_autoload()
 
 	if runtime_debugger_bridge:
 		remove_debugger_plugin(runtime_debugger_bridge)
@@ -134,6 +144,38 @@ func _exit_tree():
 		websocket_server = null
 
 	print("=== MCP SERVER SHUTDOWN ===")
+
+# Installs the shader compile-error logger so MCP shader commands can capture
+# engine shader compile errors. The logger is exposed through Engine metadata,
+# mirroring how the debugger bridges are exposed, and lives for the whole
+# editor session so errors from any thread are captured.
+func _install_shader_error_logger() -> void:
+	if shader_error_logger != null:
+		return
+
+	var logger_script = load("res://addons/godot_mcp/mcp_shader_error_logger.gd")
+	if not logger_script:
+		printerr("MCP shader error logger unavailable (script not found).")
+		return
+
+	var logger = logger_script.new()
+	if logger == null:
+		printerr("MCP shader error logger unavailable (instantiation failed).")
+		return
+
+	shader_error_logger = logger
+	OS.add_logger(logger)
+	Engine.set_meta("MCPShaderErrorLogger", logger)
+	print("MCP shader error logger installed.")
+
+func _uninstall_shader_error_logger() -> void:
+	if Engine.has_meta("MCPShaderErrorLogger"):
+		Engine.remove_meta("MCPShaderErrorLogger")
+
+	if shader_error_logger:
+		OS.remove_logger(shader_error_logger)
+		shader_error_logger = null
+	print("MCP shader error logger removed.")
 
 # Method to get the debugger bridge for other components
 func get_debugger_bridge():
@@ -233,28 +275,56 @@ func _on_client_disconnected(client_id: int) -> void:
 
 
 func _register_input_handler_autoload() -> void:
-	# Check if autoload already exists
-	if ProjectSettings.has_setting("autoload/" + INPUT_HANDLER_AUTOLOAD_NAME):
+	var setting_name := "autoload/" + INPUT_HANDLER_AUTOLOAD_NAME
+	if ProjectSettings.has_setting(setting_name):
 		print("MCP Input Handler autoload already registered.")
 		return
-	
-	# Verify the script exists
+
 	if not FileAccess.file_exists(INPUT_HANDLER_SCRIPT_PATH):
 		printerr("MCP Input Handler script not found at: " + INPUT_HANDLER_SCRIPT_PATH)
 		return
-	
-	# Add the autoload
-	ProjectSettings.set_setting("autoload/" + INPUT_HANDLER_AUTOLOAD_NAME, "*" + INPUT_HANDLER_SCRIPT_PATH)
+
+	ProjectSettings.set_setting(setting_name, "*" + INPUT_HANDLER_SCRIPT_PATH)
 	ProjectSettings.save()
+	_input_handler_autoload_added = true
 	print("MCP Input Handler autoload registered. Restart the game for input simulation to work.")
 
 
 func _remove_input_handler_autoload() -> void:
-	# Check if autoload exists before removing
-	if not ProjectSettings.has_setting("autoload/" + INPUT_HANDLER_AUTOLOAD_NAME):
+	# Never remove a setting that existed before this plugin instance started.
+	if not _input_handler_autoload_added:
 		return
-	
-	# Remove the autoload
-	ProjectSettings.set_setting("autoload/" + INPUT_HANDLER_AUTOLOAD_NAME, null)
+	var setting_name := "autoload/" + INPUT_HANDLER_AUTOLOAD_NAME
+	if ProjectSettings.get_setting(setting_name, "") == "*" + INPUT_HANDLER_SCRIPT_PATH:
+		ProjectSettings.set_setting(setting_name, null)
+		ProjectSettings.save()
+		print("MCP Input Handler autoload removed.")
+	_input_handler_autoload_added = false
+
+
+func _register_shader_runtime_autoload() -> void:
+	var setting_name := "autoload/" + SHADER_RUNTIME_AUTOLOAD_NAME
+	if ProjectSettings.has_setting(setting_name):
+		print("MCP Shader Runtime autoload already registered.")
+		return
+
+	if not FileAccess.file_exists(SHADER_RUNTIME_SCRIPT_PATH):
+		printerr("MCP Shader Runtime script not found at: " + SHADER_RUNTIME_SCRIPT_PATH)
+		return
+
+	ProjectSettings.set_setting(setting_name, "*" + SHADER_RUNTIME_SCRIPT_PATH)
 	ProjectSettings.save()
-	print("MCP Input Handler autoload removed.")
+	_shader_runtime_autoload_added = true
+	print("MCP Shader Runtime autoload registered. Restart the game for shader tools to work.")
+
+
+func _remove_shader_runtime_autoload() -> void:
+	# Never remove a setting that existed before this plugin instance started.
+	if not _shader_runtime_autoload_added:
+		return
+	var setting_name := "autoload/" + SHADER_RUNTIME_AUTOLOAD_NAME
+	if ProjectSettings.get_setting(setting_name, "") == "*" + SHADER_RUNTIME_SCRIPT_PATH:
+		ProjectSettings.set_setting(setting_name, null)
+		ProjectSettings.save()
+		print("MCP Shader Runtime autoload removed.")
+	_shader_runtime_autoload_added = false

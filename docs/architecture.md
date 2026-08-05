@@ -39,6 +39,7 @@ Godot Engine APIs
 - `project_tools.ts` - Project operations
 - `asset_tools.ts` - Asset management
 - `enhanced_tools.ts` - Runtime inspection
+- `shader_tools.ts` - Shader authoring (create/edit/get, compile diagnostics) and runtime shader inspection (materials/uniforms)
 
 ### Godot Addon (`addons/godot_mcp/`)
 
@@ -54,6 +55,8 @@ Godot Engine APIs
 | `mcp_runtime_debugger_bridge.gd` | Runtime scene inspection |
 | `mcp_input_handler.gd` | Input simulation autoload |
 | `mcp_debug_output_publisher.gd` | Publishes editor Output-panel text to subscribers; signal-driven control resolution |
+| `mcp_shader_error_logger.gd` | Custom `Logger` capturing `ERROR_TYPE_SHADER` into a marker-correlated buffer for compile diagnostics |
+| `mcp_shader_runtime.gd` | Game-side autoload registering the `mcp_shader` debugger capture for runtime shader inspection |
 | `runtime_debugger.gd` | Script injected into debugged projects |
 | `ui/mcp_panel.*` | Dock panel UI |
 
@@ -67,6 +70,7 @@ Godot Engine APIs
 - `project_commands.gd` - Project info (tree scans use a single parameterized DFS walker)
 - `capture_commands.gd` - Scene capture
 - `validation_commands.gd` - Script diagnostics and scene validation
+- `shader_commands.gd` - Shader authoring plus runtime shader material/uniform tools
 - `mcp_enhanced_commands.gd` - Runtime inspection
 - `mcp_asset_commands.gd` - Asset operations
 - `mcp_script_resource_commands.gd` - Script and resource operations
@@ -116,6 +120,27 @@ Debugger uses events for real-time notifications:
 - `stack_frame_changed` - Stack frame navigation
 
 Events are throttled (100ms minimum) to prevent flooding.
+
+## Shader Tooling
+
+Shader support has two layers:
+
+**Authoring (editor-side).** `shader_commands.gd` handles `create_shader`,
+`edit_shader`, `get_shader`, and `shader_get_compile_errors`. Compile
+diagnostics come from `mcp_shader_error_logger.gd`, a custom `Logger` installed
+via `OS.add_logger()` that captures `ERROR_TYPE_SHADER` into a thread-safe,
+marker-correlated buffer. After a write the processor forces a fresh load
+(`CACHE_MODE_REPLACE` + `Shader.get_rid()`) and drains errors recorded after a
+marker; results are path-filtered and deduplicated.
+
+**Runtime (game-side).** `shader_list_materials`, `shader_get_uniforms`, and
+`shader_set_uniform` target the running game. The `MCPShaderRuntime` autoload
+registers the `mcp_shader` `EngineDebugger` capture and answers with
+primitives-only payloads; `mcp_runtime_debugger_bridge.gd` correlates
+`mcp_shader:result` replies by request id in a bounded per-session store. Writes
+use strict value coercion and refuse shared materials unless `allow_shared`.
+
+See `docs/adr/adr-001-shader-tooling.md` for the full rationale.
 
 ## Input Simulation
 

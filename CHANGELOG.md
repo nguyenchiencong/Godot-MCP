@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.2.0 - 2026-08-05
+
+### Added
+- Shader authoring tools (Phase A): `create_shader`, `edit_shader`, `get_shader` and `shader_get_compile_errors` tools/commands for creating and editing .gdshader files with editor-backed compile diagnostics
+- `create_shader` generates a valid template per shader type (`canvas_item`, `spatial`, `particles`, `sky`, `fog`) when content is omitted, and fails when the target file already exists
+- `edit_shader`/`create_shader` return bundled compile diagnostics `{line, message, severity}` captured from the engine's own shader compiler; diagnostics are empty when the shader compiles cleanly
+- A custom `Logger` (`mcp_shader_error_logger.gd`) installed by the plugin captures `Logger.ERROR_TYPE_SHADER` entries into a thread-safe, marker-correlated buffer; forced write diagnostics are serialized and path-filtered after reload/recompile (`ResourceLoader.load` with `CACHE_MODE_REPLACE` plus `Shader.get_rid()`)
+- `shader_get_compile_errors` fallback drain tool with optional `script_path` filter and `wait_ms` wait for pending recompiles
+- shader_type conflicts are reported as warnings in diagnostics (content declaring a different type than requested on create; an edit changing the type of an existing file) while the write still succeeds
+- Integration test category (`shader`) in `server/tests/tools.test.js` covering create/edit/get/drain against the live editor
+- Shader runtime tools (Phase B): `shader_list_materials`, `shader_get_uniforms` and `shader_set_uniform` tools/commands that inspect and modify ShaderMaterials in the RUNNING game over the debugger message system
+- New game-side autoload `mcp_shader_runtime.gd` (`MCPShaderRuntime`) registers an `EngineDebugger` capture named `mcp_shader` and answers `list_materials`/`get_uniforms`/`set_uniform` requests with fully serializable payloads (vectors as arrays, colors as `{r,g,b,a}`, transforms as 16-float column-major arrays, textures/materials as res:// paths)
+- `mcp_runtime_debugger_bridge.gd` routes `mcp_shader:result` captures into a per-session pending-result store keyed by request id (`send_shader_request`/`has_shader_result`/`take_shader_result`), mirroring the eval correlation pattern
+- Uniform metadata (type, hint, default, array size) is parsed from the .gdshader source via regex (comment-stripped) and merged with live material values (`get_shader_parameter`); `set_uniform` converts serialized values back to proper Variants and refuses shared materials unless `allow_shared=true`, reporting sharing users in responses
+- Runtime shader tests added to the `shader` category in `server/tests/tools.test.js`, gated behind the existing `--skip-runtime` mechanism; `test_main_scene.tscn` gained ShaderVisuals nodes (two sprites sharing one ShaderMaterial sub-resource, one sprite with a .tres ShaderMaterial) backed by `res://test_runtime_material.gdshader`
+
+### Fixed
+- Shader logger sequence assignment is atomic with marker reads, and overlapping editor shader writes serialize their diagnostic windows
+- Runtime uniform writes reject invalid scalar coercions, wrong-length arrays/vectors/transforms, and texture paths outside `res://`
+- Plugin shutdown preserves autoload settings that existed before the plugin instance started
+- Runtime shader success tests now fail on unexpected no-session/runtime errors instead of accepting them
+
 ## 1.1.0 - 2026-08-05
 
 ### Added

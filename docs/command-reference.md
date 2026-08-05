@@ -22,6 +22,27 @@ Quick reference for all available tools. Use `godot-mcp --help <tool>` for detai
 | `get_script` | Get script content | `--script-path` or `--node-path` |
 | `get_script_diagnostics` | Parse a GDScript file and return compile/parse errors | `--script-path` |
 
+## Shader Tools
+
+| Tool | Description | Key Parameters |
+|------|-------------|----------------|
+| `create_shader` | Create a .gdshader file (template generated from type when content is omitted); returns editor compile diagnostics | `--script-path`, `--shader-type` (optional: canvas_item/spatial/particles/sky/fog), `--content` (optional); provide type or content |
+| `edit_shader` | Edit a .gdshader file; returns editor compile diagnostics | `--script-path`, `--content` |
+| `get_shader` | Get shader source | `--script-path` |
+| `shader_get_compile_errors` | Read retained shader compile errors (fallback after a write); `wait_ms` delays the read by up to 10 seconds | `--script-path` (optional), `--wait-ms` (optional, default 0) |
+
+Authoring writes return `path` and `diagnostics`; `get_shader` returns `path` and `content`. Each diagnostic has `line`, `message`, and `severity`.
+
+Runtime shader tools below require a running game with the debugger attached (F5 from the editor). Runtime waits default to 800 ms and are capped at 60 seconds.
+
+| Tool | Description | Key Parameters |
+|------|-------------|----------------|
+| `shader_list_materials` | List ShaderMaterials used by nodes in the running game (shader path, material path, sharing metadata) | `--node-path` (optional subtree root), `--material-slot` (optional), `--wait-ms` (optional) |
+| `shader_get_uniforms` | Read a node's shader uniforms in the running game: live values merged with type/hint/default parsed from shader source | `--node-path`, `--material-slot` (optional), `--wait-ms` (optional) |
+| `shader_set_uniform` | Set a shader uniform in the running game (refuses shared materials unless `--allow-shared`); serialized value forms: number, bool, exact-length vector/color arrays or dicts, res:// texture path, exact 16-number transform array | `--node-path`, `--uniform-name`, `--value`, `--material-slot` (optional), `--allow-shared` (optional), `--wait-ms` (optional) |
+
+Runtime list results contain `materials` and `count`; uniform reads contain `node_path`, `slot`, `shader_path`, `uniforms`, and `count`; successful writes contain `node_path`, `slot`, `uniform_name`, `previous_value`, `new_value`, and `sharing`.
+
 ## Scene Tools
 
 | Tool | Description | Key Parameters |
