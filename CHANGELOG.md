@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## Unreleased
+## 1.1.0 - 2026-08-05
 
 ### Added
 - `capture_scene` tool/command that renders a Godot scene into an off-screen SubViewport and returns the PNG to the AI as an MCP image content block, giving vision-capable models direct visual feedback on the scene
