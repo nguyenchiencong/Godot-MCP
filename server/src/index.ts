@@ -54,7 +54,7 @@ async function main() {
   // Create FastMCP instance
   const server = new FastMCP({
     name: 'EnhancedGodotMCP',
-    version: '1.3.0',
+    version: '1.4.0',
   });
 
   // Register all tools
