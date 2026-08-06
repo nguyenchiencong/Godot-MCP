@@ -18,11 +18,11 @@ A Command Line Interface (CLI) for AI assistants to interact with Godot Engine, 
 - **Full Godot Project Access**: AI assistants can access and modify scripts, scenes, nodes, and project resources
 - **Flexible Scene Inspection**: Retrieve hierarchy with `get_editor_scene_structure`, including properties and scripts
 - **Runtime Scene Inspection**: Snapshot live scene tree from running games with `get_runtime_scene_structure`
-- **Runtime Expression Evaluation**: Execute expressions in live games using `evaluate_runtime`
+- **Runtime Expression Evaluation**: Execute expressions in live games using `evaluate_runtime_expression`
 - **Dynamic Script Access**: Read scripts via `godot://script/{path}` and metadata via `godot://script/{path}/metadata`
 - **Script Editing Tools**: Create, edit, or template scripts directly through MCP commands
 - **Script Diagnostics**: Parse GDScript files with `get_script_diagnostics`; `create_script` and `edit_script` return parse diagnostics automatically
-- **Shader Tools**: Author `.gdshader` files with editor compile diagnostics (`create_shader`, `edit_shader`, `get_shader`) and inspect/modify live ShaderMaterials in a running game (`shader_list_materials`, `shader_get_uniforms`, `shader_set_uniform`)
+- **Shader Tools**: Author `.gdshader` files with editor compile diagnostics (`create_shader`, `edit_shader`, `get_shader`) and debug shaders live in a running game: snapshot a material's shader source and uniforms (`shader_debug_snapshot`), hot reload with on-disk file sync and rollback (`shader_hot_reload`), capture the running game's rendered frame (`capture_running_game`), toggle wireframe/normal debug-draw overlays (`shader_debug_overlay`), and inspect/set uniforms of any type (`shader_list_materials`, `shader_get_uniforms`, `shader_set_uniform`)
 - **Node Management**: Create, remove, list, and inspect nodes with automatic path normalization
 - **Node Warning Inspection**: Inspect current scene tree configuration warnings with `get_node_warnings`
 - **Scene Operations**: Create, delete, open, and save scenes; query project info and current scene state

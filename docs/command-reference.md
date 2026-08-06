@@ -39,9 +39,12 @@ Runtime shader tools below require a running game with the debugger attached (F5
 |------|-------------|----------------|
 | `shader_list_materials` | List ShaderMaterials used by nodes in the running game (shader path, material path, sharing metadata) | `--node-path` (optional subtree root), `--material-slot` (optional), `--wait-ms` (optional) |
 | `shader_get_uniforms` | Read a node's shader uniforms in the running game: live values merged with type/hint/default parsed from shader source | `--node-path`, `--material-slot` (optional), `--wait-ms` (optional) |
-| `shader_set_uniform` | Set a shader uniform in the running game (refuses shared materials unless `--allow-shared`); serialized value forms: number, bool, exact-length vector/color arrays or dicts, res:// texture path, exact 16-number transform array | `--node-path`, `--uniform-name`, `--value`, `--material-slot` (optional), `--allow-shared` (optional), `--wait-ms` (optional) |
+| `shader_set_uniform` | Set a shader uniform in the running game (refuses shared materials unless `--allow-shared`, rejects unknown uniforms); serialized value forms: number, bool, vector/color arrays or dicts, res:// texture path or {path,...} dict, 6-number mat2 (Transform2D), 9-number mat3 (Basis), 16-number mat4 (Transform3D) array, or arrays of these (exact declared length) | `--node-path`, `--uniform-name`, `--value`, `--material-slot` (optional), `--allow-shared` (optional), `--wait-ms` (optional) |
+| `shader_debug_snapshot` | Read-only snapshot of a material's shader in the running game: shader path (or "local"), type, full source, every uniform with live value and parseable default, and sharing info; fixed short internal poll, no user `wait_ms` | `--node-path`, `--material-slot` (optional) |
+| `shader_hot_reload` | Live-reload a shader in the running game: applies the new code to every material using it, then best-effort syncs the .gdshader file (write failure is reported, not fatal); returns `previous_code` — re-call with `--content` set to it to roll back (no separate revert tool) | `--shader-path` or `--node-path`, `--material-slot` (optional), `--content` |
+| `shader_debug_overlay` | Toggle a Viewport debug-draw mode in the running game: "wireframe" (all renderers; on gl_compatibility wireframes only affect meshes loaded after the call), "normal" (requires Forward+), or "off" (reset). Unsupported mode/renderer combinations return a clean error | `--mode`, `--viewport-index` (optional, default 0), `--wait-ms` (optional, default 800) |
 
-Runtime list results contain `materials` and `count`; uniform reads contain `node_path`, `slot`, `shader_path`, `uniforms`, and `count`; successful writes contain `node_path`, `slot`, `uniform_name`, `previous_value`, `new_value`, and `sharing`.
+Runtime list results contain `materials` and `count`; uniform reads contain `node_path`, `slot`, `shader_path`, `uniforms`, and `count`; successful writes contain `node_path`, `slot`, `uniform_name`, `previous_value`, `new_value`, and `sharing`. Snapshots contain `node_path`, `slot`, `shader_path`, `shader_type`, `render_modes`, `code`, `uniforms`, and `sharing`; hot reloads contain `shader_path`, `affected_materials`, `previous_code`, `file_written`, `file_write_error`, and `compile_errors`. Debug overlay replies contain `mode`, `renderer`, `viewport_index`, and `caveat` when a renderer caveat applies (e.g. `wireframe_generated` on gl_compatibility).
 
 ## Scene Tools
 
@@ -54,6 +57,7 @@ Runtime list results contain `materials` and `count`; uniform reads contain `nod
 | `get_current_scene` | Get current scene info | (none) |
 | `create_resource` | Create a resource | `--resource-type`, `--resource-path`, `--properties` |
 | `capture_scene` | Render a scene into an off-screen viewport and return the PNG image | `--scene-path` (optional), `--width`, `--height`, `--transparent`, `--output-path`, `--return-base64` (optional), `--allow-large` (optional) |
+| `capture_running_game` | Capture the running game's current rendered frame (root viewport, up to one frame of latency) and return the PNG image | `--output-path` (optional), `--return-base64` (optional), `--allow-large` (optional), `--wait-ms` (optional, default 3000) |
 | `validate_scene` | Check a scene's structural health | `--scene-path`, `--check-instantiate` (optional) |
 
 ## Project Tools
@@ -116,7 +120,7 @@ Requires a running game (F5).
 |------|-------------|----------------|
 | `get_editor_scene_structure` | Editor scene tree | `--include-properties`, `--include-scripts`, `--max-depth` |
 | `get_runtime_scene_structure` | Runtime scene tree | `--include-properties`, `--max-depth`, `--timeout-ms` |
-| `evaluate_runtime` | Evaluate expression in game | `--expression`, `--context-path`, `--timeout-ms` |
+| `evaluate_runtime_expression` | Evaluate expression in game | `--expression`, `--context-path`, `--timeout-ms` |
 | `execute_editor_script` | Run GDScript in editor | `--code` |
 
 ## Editor Tools
@@ -222,6 +226,62 @@ Defaults: width 1280, height 720, transparent background off, output directory `
 
 - `return_base64` (default false): when true, Godot sends the PNG as base64 over the WebSocket (included as `image_base64` in the command result). When false (the default), Godot only writes the PNG to disk and the server reads it back from `absolute_path`, avoiding multi-megabyte WebSocket payloads.
 - `allow_large` (default false): captures whose width x height exceeds 4,000,000 pixels are refused unless this is set to true.
+
+### capture_running_game
+
+Captures the running game's root viewport and returns the PNG as an image content block. The result shape mirrors `capture_scene` (`file_path`, `absolute_path`, `width`, `height`, plus `image_base64` when `return_base64` is true). The frame is read after the next `RenderingServer.frame_post_draw` (no forced draw on the live viewport), so the capture is at most one frame old: a uniform set in the same turn may still show the pre-change frame. Default output directory is `user://mcp_captures/` in the game's user data dir (shared with the editor, so the server can read the PNG back). The same 4,000,000-pixel cap as `capture_scene` applies unless `allow_large` is set.
+
+### shader_debug_snapshot
+
+```json
+{
+  "node_path": "/root/TestMainScene/ShaderVisuals/SoloSprite",
+  "slot": "material",
+  "shader_path": "res://test_runtime_material.gdshader",
+  "shader_type": "canvas_item",
+  "render_modes": [],
+  "code": "shader_type canvas_item; ...",
+  "uniforms": [
+    { "name": "speed", "type": "float", "value": 2.0, "default": 2.0, "hint": { "type": "range", "min": 0.0, "max": 10.0, "step": 0.5 } },
+    { "name": "tint", "type": "color", "value": { "r": 1.0, "g": 0.5, "b": 0.25, "a": 1.0 }, "default": { "r": 1.0, "g": 0.5, "b": 0.25, "a": 1.0 }, "hint": "source_color" }
+  ],
+  "sharing": { "users_count": 1, "users": ["/root/TestMainScene/ShaderVisuals/SoloSprite"] }
+}
+```
+
+Read-only: nothing is modified. `shader_path` is "local" for shaders not saved to a file. Uniform values use the canonical reply serialization: vectors `{x,y,...}`, colors `{r,g,b,a}`, transforms as arrays, textures `{path,width,height,format}`.
+
+### shader_hot_reload
+
+```json
+{
+  "shader_path": "res://test_runtime_material.gdshader",
+  "affected_materials": [
+    { "node_path": "/root/TestMainScene/ShaderVisuals/SharedSpriteA", "slot": "material", "material_path": "res://test_main_scene.tscn::ShaderMaterial_shared" },
+    { "node_path": "/root/TestMainScene/ShaderVisuals/SoloSprite", "slot": "material", "material_path": "res://test_runtime_material.tres" }
+  ],
+  "previous_code": "shader_type canvas_item; ...",
+  "file_written": true,
+  "file_write_error": "",
+  "compile_errors": []
+}
+```
+
+`previous_code` is the rollback mechanism: call `shader_hot_reload` again with `--content` set to it. A failed file write never fails the live apply; it is reported via `file_written` / `file_write_error`. `compile_errors` merges the game-side live-apply errors with the editor's recompile diagnostics (the shader error logger mechanism).
+
+### shader_debug_overlay
+
+```json
+{
+  "mode": "wireframe",
+  "renderer": "gl_compatibility",
+  "viewport_index": 0,
+  "wireframe_generated": true,
+  "caveat": "Wireframe generation enabled for gl_compatibility, but it only affects meshes loaded after this call; already-loaded meshes may not display wireframes"
+}
+```
+
+`mode` echoes the requested mode ("wireframe", "normal", or "off") and `renderer` is the running game's rendering method (`forward_plus`, `mobile`, or `gl_compatibility`). "normal" (NORMAL_BUFFER) requires Forward+. On gl_compatibility, "wireframe" enables wireframe generation and reports `wireframe_generated: true`; the flag only affects meshes loaded after the call. Mode "off" resets the viewport to `VIEWPORT_DEBUG_DRAW_DISABLED`.
 
 ### get_script_diagnostics
 

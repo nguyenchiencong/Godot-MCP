@@ -46,6 +46,24 @@ interface ShaderSetUniformParams {
   wait_ms?: number;
 }
 
+interface ShaderDebugSnapshotParams {
+  node_path: string;
+  material_slot?: string;
+}
+
+interface ShaderHotReloadParams {
+  shader_path?: string;
+  node_path?: string;
+  material_slot?: string;
+  content: string;
+}
+
+interface ShaderDebugOverlayParams {
+  mode: 'wireframe' | 'normal' | 'off';
+  viewport_index?: number;
+  wait_ms?: number;
+}
+
 /**
  * Renders the `diagnostics` field returned by create_shader/edit_shader/
  * shader_get_compile_errors into a concise one- or multi-line summary.
@@ -302,7 +320,7 @@ export const shaderTools: MCPTool[] = [
 
   {
     name: 'shader_set_uniform',
-    description: 'Set a shader uniform on a ShaderMaterial in the RUNNING game. Serialized value forms: number, bool, [x,y], [x,y,z], [x,y,z,w], {r,g,b,a} or [r,g,b,a] for colors, a res:// string for textures, and a 16-number column-major array for transforms. Refuses shared materials unless allow_shared=true. Requires the game to be running from the editor with the debugger attached',
+    description: 'Set a shader uniform on a ShaderMaterial in the RUNNING game. Serialized value forms: number, bool, vectors as {x,y,...} or [x,y,...] (vec2/vec3/vec4), colors as {r,g,b,a} or [r,g,b,a], a res:// string (or {path,...} metadata dict) for textures, a 6-number array for mat2 (Transform2D), a 9-number array for mat3 (Basis), a 16-number column-major array for mat4 (Transform3D), and arrays of these for array uniforms (exact declared length required). Refuses shared materials unless allow_shared=true and rejects unknown uniforms. Requires the game to be running from the editor with the debugger attached',
     parameters: z.object({
       node_path: z.string()
         .describe('Node path in the running game (e.g. "/root/TestMainScene/ShaderVisuals/SharedSpriteA")'),
@@ -350,6 +368,174 @@ export const shaderTools: MCPTool[] = [
         return output;
       } catch (error) {
         throw new Error(`Failed to set shader uniform: ${(error as Error).message}`);
+      }
+    },
+  },
+
+  {
+    name: 'shader_debug_snapshot',
+    description: 'Capture a full read-only snapshot of a ShaderMaterial in the RUNNING game: shader resource path (or "local"), shader source code, shader type and render modes, every declared uniform with its live value and parseable default, and material sharing info. Does not modify anything. Requires the game to be running from the editor with the debugger attached',
+    parameters: z.object({
+      node_path: z.string()
+        .describe('Node path in the running game (e.g. "/root/TestMainScene/ShaderVisuals/SoloSprite")'),
+      material_slot: z.string().optional()
+        .describe('Material slot to read (default "material"; also "material_override", "surface_0", ...)'),
+    }),
+    execute: async ({ node_path, material_slot }: ShaderDebugSnapshotParams): Promise<string> => {
+      const godot = getGodotConnection();
+
+      try {
+        const params: Record<string, any> = { node_path };
+        if (material_slot !== undefined) {
+          params.material_slot = material_slot;
+        }
+        const result = await godot.sendCommand<CommandResult>('shader_debug_snapshot', params);
+
+        const shaderPath = result.shader_path || '(unknown)';
+        const shaderType = result.shader_type ? ` (type: ${result.shader_type})` : '';
+        let output = `Shader: ${shaderPath}${shaderType} on ${result.node_path} (slot: ${result.slot})`;
+
+        const renderModes: string[] = result.render_modes ?? [];
+        if (renderModes.length > 0) {
+          output += `\nrender_mode: ${renderModes.join(', ')}`;
+        }
+
+        if (result.code) {
+          output += `\n\n\`\`\`gdshader\n${result.code}\n\`\`\``;
+        }
+
+        const uniforms: any[] = result.uniforms ?? [];
+        if (uniforms.length === 0) {
+          output += '\nNo uniforms declared in shader source.';
+        } else {
+          output += `\nUniforms (${uniforms.length}):`;
+          for (const u of uniforms) {
+            let line = `- ${u.name} (${u.type})`;
+            if (u.array) {
+              line += `[${u.array_size ?? ''}]`;
+            }
+            line += ` value=${JSON.stringify(u.value ?? null)}`;
+            if (u.default !== null && u.default !== undefined) {
+              line += ` default=${JSON.stringify(u.default)}`;
+            }
+            if (u.hint) {
+              line += ` hint=${JSON.stringify(u.hint)}`;
+            }
+            output += `\n${line}`;
+          }
+        }
+
+        const sharing = result.sharing ?? {};
+        const users: string[] = sharing.users ?? [];
+        output += `\nsharing: ${sharing.users_count ?? users.length} user(s)`;
+        if (users.length > 0) {
+          output += ` (${users.join(', ')})`;
+        }
+        return output;
+      } catch (error) {
+        throw new Error(`Failed to get shader debug snapshot: ${(error as Error).message}`);
+      }
+    },
+  },
+
+  {
+    name: 'shader_hot_reload',
+    description: 'Live-reload a shader in the RUNNING game: applies the new shader source to every material using the shader, then best-effort syncs the new code to the .gdshader file on disk (a file-write failure is reported via file_written/file_write_error and does NOT fail the live apply). Locate the shader with shader_path (res://) or node_path (+ material_slot). The reply includes previous_code (the full code before the change) and compile_errors from the shader error logger; to revert, call this tool again with content=previous_code — there is no separate revert tool. Requires the game to be running from the editor with the debugger attached',
+    parameters: z.object({
+      shader_path: z.string().optional()
+        .describe('res:// path of the shader to reload (e.g. "res://shaders/outline.gdshader"); every material using it in the running game is updated'),
+      node_path: z.string().optional()
+        .describe('Node path in the running game (e.g. "/root/TestMainScene/ShaderVisuals/SoloSprite") to locate the shader from its material; alternative to shader_path'),
+      material_slot: z.string().optional()
+        .describe('Material slot to use with node_path (default "material")'),
+      content: z.string()
+        .describe('New shader source code (full file content, including the shader_type line)'),
+    }).refine(
+      ({ shader_path, node_path }) => shader_path !== undefined || node_path !== undefined,
+      { message: 'Provide shader_path or node_path to locate the shader', path: ['shader_path'] },
+    ),
+    execute: async ({ shader_path, node_path, material_slot, content }: ShaderHotReloadParams): Promise<string> => {
+      const godot = getGodotConnection();
+
+      try {
+        const params: Record<string, any> = { content };
+        if (shader_path !== undefined) {
+          params.shader_path = shader_path;
+        }
+        if (node_path !== undefined) {
+          params.node_path = node_path;
+        }
+        if (material_slot !== undefined) {
+          params.material_slot = material_slot;
+        }
+        const result = await godot.sendCommand<CommandResult>('shader_hot_reload', params);
+
+        const shaderPath = result.shader_path || '(unknown)';
+        let output = `Hot-reloaded shader ${shaderPath}`;
+
+        const affected: any[] = result.affected_materials ?? [];
+        output += `\naffected materials (${affected.length}):`;
+        for (const entry of affected) {
+          output += `\n- ${entry.node_path} (slot: ${entry.slot}, material: ${entry.material_path ?? 'local'})`;
+        }
+
+        output += `\nfile_written: ${result.file_written === true}`;
+        if (result.file_write_error) {
+          output += `\nfile_write_error: ${result.file_write_error}`;
+        }
+
+        const compileErrors: any[] = result.compile_errors ?? [];
+        if (compileErrors.length === 0) {
+          output += '\ncompile_errors: none';
+        } else {
+          output += `\ncompile_errors (${compileErrors.length}):`;
+          for (const entry of compileErrors) {
+            const location = entry.line > 0 ? `line ${entry.line}` : 'unknown location';
+            output += `\n  [${entry.severity ?? 'error'} at ${location}] ${entry.message}`;
+          }
+        }
+
+        if (result.previous_code) {
+          output += `\n\nprevious_code (rollback: call shader_hot_reload again with content=previous_code):\n\`\`\`gdshader\n${result.previous_code}\n\`\`\``;
+        }
+        return output;
+      } catch (error) {
+        throw new Error(`Failed to hot reload shader: ${(error as Error).message}`);
+      }
+    },
+  },
+
+  {
+    name: 'shader_debug_overlay',
+    description: 'Toggle a Viewport debug-draw mode in the RUNNING game for visual shader debugging. Modes: "wireframe" (supported on all renderers; on gl_compatibility wireframes are only generated for meshes loaded after the call, reported as wireframe_generated), "normal" (NORMAL_BUFFER, requires the Forward+ renderer), "off" (reset to the default). Unsupported mode/renderer combinations return a clean error. Requires the game to be running from the editor with the debugger attached (F5)',
+    parameters: z.object({
+      mode: z.enum(['wireframe', 'normal', 'off'])
+        .describe('Debug-draw mode to apply: "wireframe", "normal" (Forward+ only), or "off" to reset'),
+      viewport_index: z.number().int().min(0).optional()
+        .describe('Viewport to apply the mode to: 0 = root viewport (default); a positive index selects the Nth Viewport child of the root'),
+      wait_ms: z.number().int().min(0).max(60000).optional()
+        .describe('Max milliseconds to wait for the game reply (default 800)'),
+    }),
+    execute: async ({ mode, viewport_index, wait_ms }: ShaderDebugOverlayParams): Promise<string> => {
+      const godot = getGodotConnection();
+
+      try {
+        const params: Record<string, any> = { mode };
+        if (viewport_index !== undefined) {
+          params.viewport_index = viewport_index;
+        }
+        if (wait_ms !== undefined) {
+          params.wait_ms = wait_ms;
+        }
+        const result = await godot.sendCommand<CommandResult>('shader_debug_overlay', params);
+
+        let output = `Debug overlay mode '${result.mode}' applied (renderer: ${result.renderer ?? 'unknown'}, viewport: ${result.viewport_index ?? 0})`;
+        if (result.caveat) {
+          output += `\ncaveat: ${result.caveat}`;
+        }
+        return output;
+      } catch (error) {
+        throw new Error(`Failed to set shader debug overlay: ${(error as Error).message}`);
       }
     },
   },

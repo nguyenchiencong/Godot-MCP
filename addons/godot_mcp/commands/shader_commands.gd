@@ -40,6 +40,17 @@ const DEFAULT_RUNTIME_TIMEOUT_MS := 800
 const MAX_RUNTIME_TIMEOUT_MS := 60000
 const MAX_COMPILE_ERROR_WAIT_MS := 10000
 
+# Fixed internal poll timeouts for runtime tools without a user wait knob:
+# snapshot is a read-only walk, hot reload applies code then waits a few
+# frames for compile feedback, capture waits one frame plus PNG encode.
+const SNAPSHOT_TIMEOUT_MS := 3000
+const HOT_RELOAD_TIMEOUT_MS := 5000
+const CAPTURE_DEFAULT_TIMEOUT_MS := 3000
+
+# Debug-draw overlay modes accepted by shader_debug_overlay; the game side
+# validates them again before applying.
+const DEBUG_OVERLAY_MODES := ["wireframe", "normal", "off"]
+
 var _shader_type_regex := RegEx.new()
 var _diagnostic_collection_active := false
 
@@ -68,6 +79,18 @@ func process_command(client_id: int, command_type: String, params: Dictionary, c
 			return true
 		"shader_set_uniform":
 			await _shader_set_uniform(client_id, params, command_id)
+			return true
+		"shader_debug_snapshot":
+			await _shader_debug_snapshot(client_id, params, command_id)
+			return true
+		"shader_hot_reload":
+			await _shader_hot_reload(client_id, params, command_id)
+			return true
+		"shader_debug_overlay":
+			await _shader_debug_overlay(client_id, params, command_id)
+			return true
+		"capture_running_game":
+			await _capture_running_game(client_id, params, command_id)
 			return true
 	return false  # Command not handled
 
@@ -382,6 +405,110 @@ func _shader_set_uniform(client_id: int, params: Dictionary, command_id: String)
 
 	var result := await _send_shader_request("set_uniform", [node_path, uniform_name, value, material_slot, allow_shared], wait_ms)
 	_finish_shader_runtime_request(client_id, result, command_id)
+
+
+func _shader_debug_snapshot(client_id: int, params: Dictionary, command_id: String) -> void:
+	var node_path := str(params.get("node_path", ""))
+	var material_slot := str(params.get("material_slot", "material"))
+
+	if node_path.is_empty():
+		return _send_error(client_id, "node_path parameter is required", command_id)
+
+	# Read-only snapshot; polls with a short fixed timeout (no user wait knob).
+	var result := await _send_shader_request("debug_snapshot", [node_path, material_slot], SNAPSHOT_TIMEOUT_MS)
+	_finish_shader_runtime_request(client_id, result, command_id)
+
+
+func _shader_hot_reload(client_id: int, params: Dictionary, command_id: String) -> void:
+	var shader_path := str(params.get("shader_path", ""))
+	var node_path := str(params.get("node_path", ""))
+	var material_slot := str(params.get("material_slot", "material"))
+	var content := str(params.get("content", ""))
+
+	if content.strip_edges().is_empty():
+		return _send_error(client_id, "content parameter is required", command_id)
+	if shader_path.is_empty() and node_path.is_empty():
+		return _send_error(client_id, "Provide shader_path or node_path (with optional material_slot) to locate the shader", command_id)
+
+	var normalized_path := ""
+	if not shader_path.is_empty():
+		normalized_path = _normalize_shader_path(shader_path)
+		if normalized_path.is_empty():
+			return _send_error(client_id, "Invalid shader path: '..' path segments are not allowed (paths must stay inside res://)", command_id)
+
+	# The game applies the new code live to every material using the shader
+	# and reports the affected materials plus the previous code (the rollback
+	# path: re-call with content=previous_code).
+	var result := await _send_shader_request("hot_reload", [normalized_path, node_path, material_slot, content], HOT_RELOAD_TIMEOUT_MS)
+	if result.has("error"):
+		return _send_error(client_id, str(result["error"]), command_id)
+	if not bool(result.get("success", true)):
+		return _send_error(client_id, str(result.get("error", "Shader hot reload failed in the running game")), command_id)
+
+	var payload := result.duplicate(true)
+	payload.erase("success")
+
+	# Best-effort disk sync: a write failure must not fail the live apply, so
+	# the file status is reported alongside the live result. Only standalone
+	# .gdshader files are written (embedded "scene.tscn::Shader_x" resources
+	# and local shaders have no file to sync).
+	var resolved_path := str(payload.get("shader_path", ""))
+	payload["file_written"] = false
+	payload["file_write_error"] = ""
+	if resolved_path.is_empty() or resolved_path == "local" or not resolved_path.ends_with(".gdshader"):
+		payload["file_write_error"] = "shader is not a standalone .gdshader file; disk write skipped"
+	else:
+		var write_error := _write_shader_file(resolved_path, content)
+		payload["file_written"] = write_error.is_empty()
+		payload["file_write_error"] = write_error
+
+	# Merge the game-side live-apply errors with the editor's own deterministic
+	# recompile check of the written file (the existing shader error logger
+	# mechanism with its marker/wait/drain cycle).
+	var game_errors: Array = payload.get("compile_errors", [])
+	if payload["file_written"]:
+		var file_diagnostics: Array = await _collect_shader_diagnostics(resolved_path)
+		payload["compile_errors"] = _merge_diagnostics(game_errors, file_diagnostics)
+	else:
+		payload["compile_errors"] = game_errors
+
+	_send_success(client_id, payload, command_id)
+
+
+func _shader_debug_overlay(client_id: int, params: Dictionary, command_id: String) -> void:
+	var mode := str(params.get("mode", ""))
+	var viewport_index := int(params.get("viewport_index", 0))
+	var wait_ms := clampi(int(params.get("wait_ms", DEFAULT_RUNTIME_TIMEOUT_MS)), 0, MAX_RUNTIME_TIMEOUT_MS)
+
+	if mode.is_empty():
+		return _send_error(client_id, "mode parameter is required", command_id)
+	if not DEBUG_OVERLAY_MODES.has(mode):
+		return _send_error(client_id, "Unknown mode '%s'; expected one of: %s" % [mode, ", ".join(DEBUG_OVERLAY_MODES)], command_id)
+
+	var result := await _send_shader_request("debug_overlay", [mode, viewport_index], wait_ms)
+	_finish_shader_runtime_request(client_id, result, command_id)
+
+
+func _capture_running_game(client_id: int, params: Dictionary, command_id: String) -> void:
+	var output_path := str(params.get("output_path", ""))
+	var return_base64 := bool(params.get("return_base64", false))
+	var allow_large := bool(params.get("allow_large", false))
+	var wait_ms := clampi(int(params.get("wait_ms", CAPTURE_DEFAULT_TIMEOUT_MS)), 0, MAX_RUNTIME_TIMEOUT_MS)
+
+	var result := await _send_shader_request("capture", [output_path, return_base64, allow_large], wait_ms)
+	_finish_shader_runtime_request(client_id, result, command_id)
+
+
+# Merges two diagnostic lists, collapsing identical entries so the game-side
+# live-apply errors and the editor-side file recompile errors are reported once.
+func _merge_diagnostics(first: Array, second: Array) -> Array:
+	var merged: Array = []
+	for diagnostic in first:
+		merged.append(diagnostic)
+	for diagnostic in second:
+		if not merged.has(diagnostic):
+			merged.append(diagnostic)
+	return merged
 
 # Sends a shader request to the running game and polls for the correlated
 # result until wait_ms elapses. Returns the game's result Dictionary or an

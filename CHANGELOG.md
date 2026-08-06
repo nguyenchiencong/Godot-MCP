@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.3.0 - 2026-08-06
+
+### Added
+- Shader runtime debugging tools (Phase C): `shader_debug_snapshot`, `shader_hot_reload`, `shader_debug_overlay` and `capture_running_game` tools/commands for debugging shaders in the RUNNING game over the debugger message system
+- `shader_debug_snapshot` returns a read-only snapshot of a ShaderMaterial: shader path (or "local"), full source, shader type and render modes, every uniform with live value and parseable default, and sharing info; polls internally with a fixed short timeout (no `wait_ms` knob)
+- `shader_hot_reload` live-reloads new shader source on every material using the shader in the running game, then best-effort syncs the `.gdshader` file; the reply includes `previous_code` (roll back by re-calling with `content=previous_code`; no separate revert tool) and merged `compile_errors`, and a failed file write is reported via `file_written`/`file_write_error` without failing the live apply
+- `shader_debug_overlay` toggles Viewport debug-draw modes (`wireframe`, `normal`, `off`) with renderer-aware behavior: `normal` requires Forward+, and `wireframe` on gl_compatibility reports `wireframe_generated` (only affects meshes loaded after the call); unsupported mode/renderer combinations return a clean error
+- `capture_running_game` captures the running game's root viewport and returns the PNG: the frame is read after the next `RenderingServer.frame_post_draw` (at most one frame of latency), the PNG is saved under `user://mcp_captures` with the 4MP pixel cap (lifted by `allow_large`), and `wait_ms` defaults to 3000 with a 60000 maximum
+- `shader_set_uniform` extended value types: vectors (arrays or `{x,y,...}` dicts), colors, mat2/Transform2D (6 floats), mat3/Basis (9), mat4/Transform3D (16, column-major), textures (res:// string or `{path,...}` dict), and arrays of all of these (exact declared length required); the shared-material gate (`allow_shared`) and unknown-uniform rejection are retained
+- Test project renderer flipped to `forward_plus` so the runtime shader tools exercise the Forward+ path
+
+### Fixed
+- Documentation now refers to the runtime evaluation tool as `evaluate_runtime_expression` (was `evaluate_runtime`) in the command reference and README
+
 ## 1.2.0 - 2026-08-05
 
 ### Added

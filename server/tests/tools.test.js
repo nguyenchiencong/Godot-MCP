@@ -48,7 +48,7 @@ import { captureTools } from '../dist/tools/capture_tools.js';
 import { diagnosticsTools } from '../dist/tools/diagnostics_tools.js';
 import { shaderTools } from '../dist/tools/shader_tools.js';
 
-import { writeFileSync, rmSync } from 'fs';
+import { writeFileSync, readFileSync, rmSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -439,13 +439,14 @@ print("Cleaned up test shader: ${TEST_SHADER_PATH}")
 				requiresRuntime: true
 			},
 			// Vec2 round-trip: set a vec2 uniform, then re-read it via get_uniforms.
+			// Values serialize canonically as {x,y} dicts in replies.
 			{
 				tool: 'shader_set_uniform',
 				get params() {
 					return { node_path: '/root/TestMainScene/ShaderVisuals/SoloSprite', uniform_name: 'offset', value: [0.5, 0.25] };
 				},
 				validate: (result) => result.includes("Set uniform 'offset' on /root/TestMainScene/ShaderVisuals/SoloSprite")
-					&& result.includes('new: [0.5,0.25]'),
+					&& result.includes('new: {"x":0.5,"y":0.25}'),
 				requiresRuntime: true
 			},
 			{
@@ -455,7 +456,7 @@ print("Cleaned up test shader: ${TEST_SHADER_PATH}")
 				},
 				validate: (result) => {
 					const tintMatch = result.match(/tint \(color\) value=(\{[^{}]*\})/);
-					const offsetMatch = result.match(/offset \(vec2\) value=(\[[0-9.,\- ]+\])/);
+					const offsetMatch = result.match(/offset \(vec2\) value=(\{[^{}]*\})/);
 					if (!tintMatch || !offsetMatch) {
 						return false;
 					}
@@ -463,11 +464,52 @@ print("Cleaned up test shader: ${TEST_SHADER_PATH}")
 						const tint = JSON.parse(tintMatch[1]);
 						const offset = JSON.parse(offsetMatch[1]);
 						return tint.r === 0.5 && tint.g === 0.25 && tint.b === 0.125 && tint.a === 1
-							&& offset.length === 2 && offset[0] === 0.5 && offset[1] === 0.25;
+							&& offset.x === 0.5 && offset.y === 0.25;
 					} catch (e) {
 						return false;
 					}
 				},
+				requiresRuntime: true
+			},
+			// Shader debug snapshot (Phase B): read-only full material snapshot.
+			{
+				tool: 'shader_debug_snapshot',
+				get params() {
+					return { node_path: '/root/TestMainScene/ShaderVisuals/SoloSprite', material_slot: 'material' };
+				},
+				validate: (result) => result.includes('Shader: res://test_runtime_material.gdshader (type: canvas_item) on /root/TestMainScene/ShaderVisuals/SoloSprite (slot: material)')
+					&& result.includes('Uniforms (9):')
+					&& result.includes('- speed (float)')
+					&& result.includes('- tint (color)')
+					&& result.includes('sharing: 1 user(s)'),
+				requiresRuntime: true
+			},
+			// Shader hot reload (Phase B): re-applying the file's own content is a
+			// no-op change, so the shader and its file stay untouched, while the
+			// affected-materials enumeration and rollback previous_code are validated.
+			{
+				tool: 'shader_hot_reload',
+				get params() {
+					const content = readFileSync(path.join(PROJECT_ROOT, 'test_runtime_material.gdshader'), 'utf8');
+					return { shader_path: 'res://test_runtime_material.gdshader', content };
+				},
+				validate: (result) => result.includes('Hot-reloaded shader res://test_runtime_material.gdshader')
+					&& result.includes('affected materials (3):')
+					&& result.includes('/root/TestMainScene/ShaderVisuals/SharedSpriteA')
+					&& result.includes('/root/TestMainScene/ShaderVisuals/SoloSprite')
+					&& result.includes('file_written: true')
+					&& result.includes('compile_errors: none')
+					&& result.includes('previous_code'),
+				requiresRuntime: true
+			},
+			// Shader debug overlay (T5): toggles Viewport debug-draw modes in
+			// the running game. "off" resets to the default and works on every
+			// renderer, so it also leaves the game in a clean state.
+			{
+				tool: 'shader_debug_overlay',
+				params: { mode: 'off', viewport_index: 0 },
+				validate: (result) => result.includes("Debug overlay mode 'off' applied")
+					&& result.includes('renderer:'),
 				requiresRuntime: true
 			}
 		]
@@ -571,6 +613,28 @@ print("Cleaned up test resource: ${resourcePath}")
 						return false;
 					}
 				}
+			},
+			{
+				tool: 'capture_running_game',
+				params: {},
+				validate: (result) => {
+					try {
+						const parsed = JSON.parse(result);
+						const imageBlock = parsed.content.find((block) => block.type === 'image');
+						if (!imageBlock) {
+							return false;
+						}
+						const buffer = Buffer.from(imageBlock.data, 'base64');
+						if (buffer.length < 4 || buffer.subarray(0, 4).toString('hex') !== '89504e47') {
+							return false;
+						}
+						const textBlock = parsed.content.find((block) => block.type === 'text');
+						return !!(textBlock && textBlock.text && textBlock.text.includes('captured'));
+					} catch (e) {
+						return false;
+					}
+				},
+				requiresRuntime: true
 			}
 		]
 	},
