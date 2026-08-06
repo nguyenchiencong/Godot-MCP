@@ -30,6 +30,8 @@ Quick reference for all available tools. Use `godot-mcp --help <tool>` for detai
 | `edit_shader` | Edit a .gdshader file; returns editor compile diagnostics | `--script-path`, `--content` |
 | `get_shader` | Get shader source | `--script-path` |
 | `shader_get_compile_errors` | Read retained shader compile errors (fallback after a write); `wait_ms` delays the read by up to 10 seconds | `--script-path` (optional), `--wait-ms` (optional, default 0) |
+| `shader_get_warnings` | Report shader warnings for a .gdshader file: unused uniforms/varyings/consts/structs/functions and unused locals (static scanner mirroring the engine UNUSED_* family) plus compile errors from a forced recompile. Side effect: enables the `debug/shader_language/warnings/*` ProjectSettings toggles | `--script-path` (optional), `--wait-ms` (optional, default 0) |
+| `shader_project_health` | Scan every .gdshader under res:// and report per-file compile errors and static warnings. Side effect: enables the `debug/shader_language/warnings/*` ProjectSettings toggles | `--wait-ms` (optional, default 5000) |
 
 Authoring writes return `path` and `diagnostics`; `get_shader` returns `path` and `content`. Each diagnostic has `line`, `message`, and `severity`.
 
@@ -39,12 +41,16 @@ Runtime shader tools below require a running game with the debugger attached (F5
 |------|-------------|----------------|
 | `shader_list_materials` | List ShaderMaterials used by nodes in the running game (shader path, material path, sharing metadata) | `--node-path` (optional subtree root), `--material-slot` (optional), `--wait-ms` (optional) |
 | `shader_get_uniforms` | Read a node's shader uniforms in the running game: live values merged with type/hint/default parsed from shader source | `--node-path`, `--material-slot` (optional), `--wait-ms` (optional) |
-| `shader_set_uniform` | Set a shader uniform in the running game (refuses shared materials unless `--allow-shared`, rejects unknown uniforms); serialized value forms: number, bool, vector/color arrays or dicts, res:// texture path or {path,...} dict, 6-number mat2 (Transform2D), 9-number mat3 (Basis), 16-number mat4 (Transform3D) array, or arrays of these (exact declared length) | `--node-path`, `--uniform-name`, `--value`, `--material-slot` (optional), `--allow-shared` (optional), `--wait-ms` (optional) |
+| `shader_set_uniform` | Set a shader uniform in the running game (refuses shared materials unless `--allow-shared`, rejects unknown uniforms); locate the target with `--node-path` (single material) or `--shader-path` (shader-wide: applies to every material using that .gdshader, shared materials skipped unless `--allow-shared`); serialized value forms: number, bool, vector/color arrays or dicts, res:// texture path or {path,...} dict, 6-number mat2 (Transform2D), 9-number mat3 (Basis), 16-number mat4 (Transform3D) array, or arrays of these (exact declared length) | `--node-path` or `--shader-path`, `--uniform-name`, `--value`, `--material-slot` (optional), `--allow-shared` (optional), `--wait-ms` (optional) |
 | `shader_debug_snapshot` | Read-only snapshot of a material's shader in the running game: shader path (or "local"), type, full source, every uniform with live value and parseable default, and sharing info; fixed short internal poll, no user `wait_ms` | `--node-path`, `--material-slot` (optional) |
 | `shader_hot_reload` | Live-reload a shader in the running game: applies the new code to every material using it, then best-effort syncs the .gdshader file (write failure is reported, not fatal); returns `previous_code` — re-call with `--content` set to it to roll back (no separate revert tool) | `--shader-path` or `--node-path`, `--material-slot` (optional), `--content` |
 | `shader_debug_overlay` | Toggle a Viewport debug-draw mode in the running game: "wireframe" (all renderers; on gl_compatibility wireframes only affect meshes loaded after the call), "normal" (requires Forward+), or "off" (reset). Unsupported mode/renderer combinations return a clean error | `--mode`, `--viewport-index` (optional, default 0), `--wait-ms` (optional, default 800) |
+| `shader_debug_visualize` | Temporarily inject visualization code into a material's shader in the running game (never writes files; restored by mode=off or automatically on compile failure): "uv", "normals", "screen_pos", "world_pos", "custom" (expression required), or "off". Only canvas_item and spatial shaders | `--node-path`, `--mode`, `--expression` (required for custom), `--material-slot` (optional, default material), `--wait-ms` (optional, default 800) |
+| `shader_reset_uniforms` | Reset every shader parameter of a material in the running game to its declared default (defaults parsed from the shader source; null clears the override) | `--node-path`, `--material-slot` (optional, default material), `--wait-ms` (optional, default 800) |
+| `shader_reload_from_disk` | Reload a shader in the running game from its .gdshader file on disk and apply it live to every material using it (standalone res:// file required); `unchanged` reports when the live code already equals the disk content; `previous_code` is the rollback path via `shader_hot_reload` | `--shader-path` or `--node-path`, `--material-slot` (optional), `--wait-ms` (optional, default 800) |
+| `shader_measure_frame_time` | Read (and optionally toggle) the running game's viewport render-time measurement in ms (gpu_ms/cpu_ms); enable omitted reads without changing state, true enables (waits a few frames to settle), false disables. Per-viewport, not per-shader | `--enable` (optional bool), `--viewport-index` (optional, default 0), `--wait-ms` (optional, default 800) |
 
-Runtime list results contain `materials` and `count`; uniform reads contain `node_path`, `slot`, `shader_path`, `uniforms`, and `count`; successful writes contain `node_path`, `slot`, `uniform_name`, `previous_value`, `new_value`, and `sharing`. Snapshots contain `node_path`, `slot`, `shader_path`, `shader_type`, `render_modes`, `code`, `uniforms`, and `sharing`; hot reloads contain `shader_path`, `affected_materials`, `previous_code`, `file_written`, `file_write_error`, and `compile_errors`. Debug overlay replies contain `mode`, `renderer`, `viewport_index`, and `caveat` when a renderer caveat applies (e.g. `wireframe_generated` on gl_compatibility).
+Runtime list results contain `materials` and `count`; uniform reads contain `node_path`, `slot`, `shader_path`, `uniforms`, and `count`; successful per-node writes contain `node_path`, `slot`, `uniform_name`, `previous_value`, `new_value`, and `sharing`; shader-wide writes (shader_path) contain `uniform_name`, `value`, `affected`, `skipped`, and `count`. Snapshots contain `node_path`, `slot`, `shader_path`, `shader_type`, `render_modes`, `code`, `uniforms`, and `sharing`; hot reloads contain `shader_path`, `affected_materials`, `previous_code`, `file_written`, `file_write_error`, and `compile_errors`. Debug overlay replies contain `mode`, `renderer`, `viewport_index`, and `caveat` when a renderer caveat applies (e.g. `wireframe_generated` on gl_compatibility). Warnings replies contain `warnings_enabled`, `warnings`, `errors`, and `total`; project health replies contain `total_files`, `files_with_errors`, `files_with_warnings`, `results`, and `enabled_warnings`. Visualization replies contain `mode`, `shader_type`, `injected`, `compile_errors`, `rolled_back`, and `restore_note`; resets contain `node_path`, `slot`, `reset`, and `count`; disk reloads contain `shader_path`, `affected_materials`, `file_read`, `file_error`, `compile_errors`, and `unchanged`; frame-time replies contain `gpu_ms`, `cpu_ms`, `enabled`, `viewport_index`, `renderer`, and `note`.
 
 ## Scene Tools
 
@@ -57,7 +63,7 @@ Runtime list results contain `materials` and `count`; uniform reads contain `nod
 | `get_current_scene` | Get current scene info | (none) |
 | `create_resource` | Create a resource | `--resource-type`, `--resource-path`, `--properties` |
 | `capture_scene` | Render a scene into an off-screen viewport and return the PNG image | `--scene-path` (optional), `--width`, `--height`, `--transparent`, `--output-path`, `--return-base64` (optional), `--allow-large` (optional) |
-| `capture_running_game` | Capture the running game's current rendered frame (root viewport, up to one frame of latency) and return the PNG image | `--output-path` (optional), `--return-base64` (optional), `--allow-large` (optional), `--wait-ms` (optional, default 3000) |
+| `capture_running_game` | Capture the running game's current rendered frame (root viewport, up to one frame of latency) and return the PNG image; optional `--node-path` crops to a 2D node's (CanvasItem/Control) on-screen region (3D nodes rejected) | `--output-path` (optional), `--return-base64` (optional), `--allow-large` (optional), `--wait-ms` (optional, default 3000), `--node-path` (optional) |
 | `validate_scene` | Check a scene's structural health | `--scene-path`, `--check-instantiate` (optional) |
 
 ## Project Tools
@@ -231,6 +237,8 @@ Defaults: width 1280, height 720, transparent background off, output directory `
 
 Captures the running game's root viewport and returns the PNG as an image content block. The result shape mirrors `capture_scene` (`file_path`, `absolute_path`, `width`, `height`, plus `image_base64` when `return_base64` is true). The frame is read after the next `RenderingServer.frame_post_draw` (no forced draw on the live viewport), so the capture is at most one frame old: a uniform set in the same turn may still show the pre-change frame. Default output directory is `user://mcp_captures/` in the game's user data dir (shared with the editor, so the server can read the PNG back). The same 4,000,000-pixel cap as `capture_scene` applies unless `allow_large` is set.
 
+Optional `node_path` (2D only: CanvasItem/Control) crops the capture to the node's on-screen region — CanvasItems use `get_global_transform_with_canvas()` applied to their local bounds, Controls use `get_global_rect()`. 3D nodes are rejected with a clean error. When a crop is applied the reply additionally contains `cropped: true`, `original_width`, and `original_height` (the pre-crop frame dimensions); `width`/`height` then describe the cropped image. The 4MP cap applies to the final (cropped) size.
+
 ### shader_debug_snapshot
 
 ```json
@@ -282,6 +290,105 @@ Read-only: nothing is modified. `shader_path` is "local" for shaders not saved t
 ```
 
 `mode` echoes the requested mode ("wireframe", "normal", or "off") and `renderer` is the running game's rendering method (`forward_plus`, `mobile`, or `gl_compatibility`). "normal" (NORMAL_BUFFER) requires Forward+. On gl_compatibility, "wireframe" enables wireframe generation and reports `wireframe_generated: true`; the flag only affects meshes loaded after the call. Mode "off" resets the viewport to `VIEWPORT_DEBUG_DRAW_DISABLED`.
+
+### shader_get_warnings
+
+```json
+{
+  "warnings_enabled": true,
+  "warnings": [
+    { "line": 7, "message": "The uniform 'steps' is declared but never used.", "severity": "warning", "file": "res://test_runtime_material.gdshader" },
+    { "line": 11, "message": "The uniform 'weights' is declared but never used.", "severity": "warning", "file": "res://test_runtime_material.gdshader" }
+  ],
+  "errors": [],
+  "total": 7
+}
+```
+
+`warnings` entries carry `line`, `message`, `severity` (always "warning"), and `file`. Each mirrors an engine UNUSED_* warning (UNUSED_UNIFORM / UNUSED_VARYING / UNUSED_CONSTANT / UNUSED_STRUCT / UNUSED_FUNCTION / UNUSED_LOCAL_VARIABLE) plus FORMATTING_ERROR for empty statements, gated on the matching `debug/shader_language/warnings/*` ProjectSettings toggle (the call enables them — a documented side effect). `errors` are real compile errors from a forced recompile of the file; `total` is `warnings.size()`. Without `script_path` only `warnings_enabled` is meaningful (warnings/errors empty).
+
+### shader_project_health
+
+```json
+{
+  "total_files": 1,
+  "files_with_errors": 0,
+  "files_with_warnings": 1,
+  "results": [
+    { "path": "res://test_runtime_material.gdshader", "errors": [], "warnings": [ { "line": 7, "message": "...", "severity": "warning", "file": "res://test_runtime_material.gdshader" } ] }
+  ],
+  "enabled_warnings": true
+}
+```
+
+Scans every .gdshader under res:// (`.godot` cache excluded), force-recompiling each with the marker-correlated error logger so one file's recompile cannot contaminate another's results. `results` entries are `{ path, errors, warnings }`; `files_with_errors` / `files_with_warnings` count the non-empty ones. The `debug/shader_language/warnings/*` toggles are enabled as a side effect (see shader_get_warnings).
+
+### shader_debug_visualize
+
+```json
+{
+  "mode": "uv",
+  "shader_type": "canvas_item",
+  "injected": "COLOR = vec4(UV, 0.0, 1.0);",
+  "original_code": "shader_type canvas_item; ...",
+  "compile_errors": [],
+  "rolled_back": false,
+  "restore_note": "call shader_debug_visualize with mode=off to restore",
+  "renderer": "gl_compatibility"
+}
+```
+
+The injected code lives only in the live Shader resource (never written to disk). `mode=off` restores the exact original code and replies `{ mode: "off", restored: true, previous_mode: "uv", shader_type, renderer }` (or `restored: false` when nothing was registered for the node). If the injected variant fails to compile, the original code is restored automatically and `rolled_back: true` with the `compile_errors` reported. Only `canvas_item` and `spatial` shaders are supported; `custom` mode assigns the user `expression` to COLOR (canvas_item) or ALBEDO (spatial).
+
+### shader_reset_uniforms
+
+```json
+{
+  "node_path": "/root/TestMainScene/ShaderVisuals/SoloSprite",
+  "slot": "material",
+  "reset": [
+    { "name": "speed", "value": 2.0 },
+    { "name": "albedo_tex", "value": null }
+  ],
+  "count": 9
+}
+```
+
+Defaults come from `Shader.get_shader_uniform_list()` when the engine provides them, falling back to the regex-parsed defaults from the shader source; a null default clears the parameter override so the shader's built-in default applies. `reset` lists every parameter with its restored value; `count` is `reset.size()`.
+
+### shader_reload_from_disk
+
+```json
+{
+  "shader_path": "res://test_runtime_material.gdshader",
+  "affected_materials": [
+    { "node_path": "/root/TestMainScene/ShaderVisuals/SoloSprite", "slot": "material", "material_path": "res://test_runtime_material.tres" }
+  ],
+  "applied_code": "shader_type canvas_item; ...",
+  "previous_code": "shader_type canvas_item; ...",
+  "file_read": true,
+  "file_error": "",
+  "compile_errors": [],
+  "unchanged": false
+}
+```
+
+Same material lookup as `shader_hot_reload`; the shader must be a standalone res:// .gdshader file. When the live code already equals the disk content, `unchanged: true` and nothing is reapplied. `previous_code` is the rollback path (re-call `shader_hot_reload` with `--content` set to it). Parameter values are re-applied through the shared coercion helper so values keep working when the disk content changed a uniform's type.
+
+### shader_measure_frame_time
+
+```json
+{
+  "gpu_ms": 1.24,
+  "cpu_ms": 0.83,
+  "enabled": true,
+  "viewport_index": 0,
+  "renderer": "gl_compatibility",
+  "note": "Measurement is per-viewport, not per-shader; to compare shaders, toggle the shader change and measure again"
+}
+```
+
+`enable` omitted reads without changing state; `enable=true` enables measurement and waits a few frames for it to settle (the first frames after enabling report 0.0); `enable=false` disables. Units are milliseconds. Measurement is per-viewport (0 = root viewport; positive index selects the Nth Viewport child of the root), so it measures the whole frame, not one shader.
 
 ### get_script_diagnostics
 

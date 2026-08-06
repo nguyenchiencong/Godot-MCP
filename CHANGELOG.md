@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.4.0 - 2026-08-06
+
+### Added
+- Shader diagnostics and visualization tools (Phase D): `shader_get_warnings`, `shader_project_health`, `shader_debug_visualize`, `shader_reset_uniforms`, `shader_reload_from_disk` and `shader_measure_frame_time` tools/commands
+- `shader_debug_visualize` temporarily injects visualization code into a material's shader in the running game and never writes files: `uv`, `normals`, `screen_pos`, `world_pos` or `custom` (`expression` required, assigned to COLOR for canvas_item / ALBEDO for spatial); `mode=off` restores the exact original code, and a compile failure rolls back automatically reporting `rolled_back` plus `compile_errors`; only canvas_item and spatial shaders are supported
+- `shader_reset_uniforms` resets every shader parameter of a material in the running game to its declared default (engine `Shader.get_shader_uniform_list()` values with regex-parsed source defaults as fallback; a null default clears the override); the reply lists each restored entry in `reset` plus `count`
+- `shader_reload_from_disk` pushes the current `.gdshader` file content into the running game and applies it live to every material using the shader (same material lookup as `shader_hot_reload`; a standalone res:// file is required); `unchanged` reports when the live code already equals the disk content, `file_read`/`file_error` report the disk read, and disk is the source of truth (no rollback needed)
+- `shader_measure_frame_time` reads (and optionally toggles) the running game's viewport render-time measurement in milliseconds (`gpu_ms`/`cpu_ms`): `enable` omitted reads without changing state, `true` enables, `false` disables; measurement is per-viewport (`viewport_index`, 0 = root), not per-shader
+- `shader_get_warnings` surfaces shader warnings (unused uniforms/varyings/consts/structs/functions and unused locals, mirroring the engine UNUSED_* family) via a static scanner plus compile errors from a forced recompile; the first call enables the `debug/shader_language/warnings/*` ProjectSettings toggles (documented persisted side effect)
+- `shader_project_health` scans every .gdshader under res:// (`.godot` cache excluded), force-recompiles each with the marker-correlated error logger so one file's recompile cannot contaminate another's, and reports `total_files`, `files_with_errors`, `files_with_warnings`, per-file `results` and `enabled_warnings`; `wait_ms` defaults to 5000 with a 60000 maximum
+- New static scanner `mcp_shader_warning_scanner.gd` (`MCPShaderWarningScanner`) detects UNUSED_* style warnings and formatting errors in .gdshader sources (comment-stripped), gated on the matching `debug/shader_language/warnings/*` ProjectSettings toggles, because engine shader warnings never reach the error logger
+- `shader_set_uniform` extended with shader-wide scope: an optional `shader_path` (res:// .gdshader) applies the uniform to every material using that shader in the running game, skipping materials shared by more than one node unless `allow_shared=true` (reported via `affected`/`skipped`/`count`); the `node_path` mode is unchanged
+- `capture_running_game` extended with an optional `node_path` (2D CanvasItem/Control only; 3D nodes are rejected with a clean error) that crops the capture to the node's on-screen region; the reply gains `cropped`, `original_width` and `original_height`
+- Runtime shader and diagnostics test coverage extended in `server/tests/tools.test.js`: 94/94 tests passing
+
+### Fixed
+- `shader_measure_frame_time` waits `MEASURE_SETTLE_FRAMES` process frames after enabling measurement before reading (the first frames report 0.0), fixing the off-by-one read of the enabling frame
+
 ## 1.3.0 - 2026-08-06
 
 ### Added

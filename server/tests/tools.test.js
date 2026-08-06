@@ -511,6 +511,134 @@ print("Cleaned up test shader: ${TEST_SHADER_PATH}")
 				validate: (result) => result.includes("Debug overlay mode 'off' applied")
 					&& result.includes('renderer:'),
 				requiresRuntime: true
+			},
+			// Phase D editor-side tools: static warnings need no running game.
+			// The Phase B test shader deliberately leaves 7 of its 9 uniforms
+			// unused, so shader_get_warnings must report exactly 7 warnings.
+			{
+				tool: 'shader_get_warnings',
+				get params() {
+					return { script_path: 'res://test_runtime_material.gdshader', wait_ms: 10 };
+				},
+				validate: (result) => result.includes('warnings_enabled: true')
+					&& result.includes('warnings (7):')
+					&& result.includes("The uniform 'steps' is declared but never used.")
+					&& result.includes('errors (0):')
+					&& result.includes('total: 7')
+			},
+			{
+				tool: 'shader_project_health',
+				get params() {
+					return { wait_ms: 10 };
+				},
+				validate: (result) => result.includes('Shader project health scan (1 file(s)):')
+					&& result.includes('test_runtime_material.gdshader')
+					&& result.includes('files_with_errors: 0')
+					&& result.includes('enabled_warnings: true')
+			},
+			// Phase D runtime tools. shader_debug_visualize injects a temporary
+			// visualization, then mode=off restores the original code, so the
+			// scene is left clean for the tests that follow. The sequence
+			// uv -> world_pos -> off -> snapshot protects the world_pos
+			// compilation path (regression: varying was inserted after the
+			// functions, and vec4(VERTEX, 1.0) is invalid for canvas_item)
+			// and the baseline restoration path (regression: a mode switch
+			// overwrote the registry baseline, so off restored the previous
+			// injected shader instead of the true original).
+			{
+				tool: 'shader_debug_visualize',
+				get params() {
+					return { node_path: '/root/TestMainScene/ShaderVisuals/SoloSprite', mode: 'uv' };
+				},
+				validate: (result) => result.includes("Visualization mode 'uv' applied")
+					&& result.includes('injected:')
+					&& result.includes('compile_errors: none'),
+				requiresRuntime: true
+			},
+			{
+				tool: 'shader_debug_visualize',
+				get params() {
+					// Mode switch without an intervening off: world_pos must
+					// compile on canvas_item and the baseline must be kept.
+					return { node_path: '/root/TestMainScene/ShaderVisuals/SoloSprite', mode: 'world_pos' };
+				},
+				validate: (result) => result.includes("Visualization mode 'world_pos' applied")
+					&& result.includes('compile_errors: none'),
+				requiresRuntime: true
+			},
+			{
+				tool: 'shader_debug_visualize',
+				get params() {
+					return { node_path: '/root/TestMainScene/ShaderVisuals/SoloSprite', mode: 'off' };
+				},
+				validate: (result) => result.includes("Visualization mode 'off' applied")
+					&& result.includes('restored: true'),
+				requiresRuntime: true
+			},
+			{
+				tool: 'shader_debug_snapshot',
+				get params() {
+					// After off, the full source must be the true original:
+					// COLOR = tint; present, no injected mcp_world_pos left.
+					return { node_path: '/root/TestMainScene/ShaderVisuals/SoloSprite', material_slot: 'material' };
+				},
+				validate: (result) => result.includes('COLOR = tint;')
+					&& !result.includes('mcp_world_pos'),
+				requiresRuntime: true
+			},
+			// Resetting uniforms restores the shader defaults (speed defaults to 2.0).
+			{
+				tool: 'shader_reset_uniforms',
+				get params() {
+					return { node_path: '/root/TestMainScene/ShaderVisuals/SoloSprite', material_slot: 'material' };
+				},
+				validate: (result) => result.includes('Reset 9 uniform(s)')
+					&& result.includes('- speed = 2')
+					&& result.includes('count: 9'),
+				requiresRuntime: true
+			},
+			// Reloading the file's own content is a no-op change (unchanged: true),
+			// but the affected-materials enumeration is still validated.
+			{
+				tool: 'shader_reload_from_disk',
+				get params() {
+					return { shader_path: 'res://test_runtime_material.gdshader' };
+				},
+				validate: (result) => result.includes('Reloaded shader res://test_runtime_material.gdshader from disk')
+					&& result.includes('affected materials (3):')
+					&& result.includes('/root/TestMainScene/ShaderVisuals/SoloSprite')
+					&& result.includes('compile_errors: none'),
+				requiresRuntime: true
+			},
+			// Shader-wide uniform set (shader_path): applies to every material
+			// using the shader. allow_shared=true so the two sprites sharing one
+			// material are affected too (without it they are reported under
+			// skipped instead and affected would be 1).
+			{
+				tool: 'shader_set_uniform',
+				get params() {
+					return { shader_path: 'res://test_runtime_material.gdshader', uniform_name: 'speed', value: 2.5, allow_shared: true };
+				},
+				validate: (result) => result.includes("Set uniform 'speed' via shader res://test_runtime_material.gdshader")
+					&& result.includes('affected (3):')
+					&& result.includes('/root/TestMainScene/ShaderVisuals/SharedSpriteA')
+					&& result.includes('/root/TestMainScene/ShaderVisuals/SoloSprite')
+					&& result.includes('skipped (0):')
+					&& result.includes('count: 3'),
+				requiresRuntime: true
+			},
+			// Render-time measurement: enable=true must flip the viewport flag and
+			// report numeric gpu_ms/cpu_ms values.
+			{
+				tool: 'shader_measure_frame_time',
+				get params() {
+					return { enable: true, viewport_index: 0 };
+				},
+				validate: (result) => result.includes('Render-time measurement')
+					&& result.includes('gpu_ms:')
+					&& result.includes('cpu_ms:')
+					&& result.includes('enabled: true'),
+				requiresRuntime: true
 			}
 		]
 	},
@@ -630,6 +758,33 @@ print("Cleaned up test resource: ${resourcePath}")
 						}
 						const textBlock = parsed.content.find((block) => block.type === 'text');
 						return !!(textBlock && textBlock.text && textBlock.text.includes('captured'));
+					} catch (e) {
+						return false;
+					}
+				},
+				requiresRuntime: true
+			},
+			{
+				tool: 'capture_running_game',
+				get params() {
+					// 2D node-path crop: the reply text must report the crop and the
+					// original frame dimensions.
+					return { node_path: '/root/TestMainScene/ShaderVisuals/SoloSprite' };
+				},
+				validate: (result) => {
+					try {
+						const parsed = JSON.parse(result);
+						const imageBlock = parsed.content.find((block) => block.type === 'image');
+						if (!imageBlock) {
+							return false;
+						}
+						const buffer = Buffer.from(imageBlock.data, 'base64');
+						if (buffer.length < 4 || buffer.subarray(0, 4).toString('hex') !== '89504e47') {
+							return false;
+						}
+						const textBlock = parsed.content.find((block) => block.type === 'text');
+						return !!(textBlock && textBlock.text && textBlock.text.includes('captured')
+							&& textBlock.text.includes('Cropped to the requested node region'));
 					} catch (e) {
 						return false;
 					}

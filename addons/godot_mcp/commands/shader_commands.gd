@@ -47,9 +47,18 @@ const SNAPSHOT_TIMEOUT_MS := 3000
 const HOT_RELOAD_TIMEOUT_MS := 5000
 const CAPTURE_DEFAULT_TIMEOUT_MS := 3000
 
+# shader_project_health waits for the renderer to settle before scanning
+# every .gdshader in the project; large projects need more time.
+const HEALTH_DEFAULT_WAIT_MS := 5000
+const MAX_HEALTH_WAIT_MS := 60000
+
 # Debug-draw overlay modes accepted by shader_debug_overlay; the game side
 # validates them again before applying.
 const DEBUG_OVERLAY_MODES := ["wireframe", "normal", "off"]
+
+# Visualization modes accepted by shader_debug_visualize; the game side
+# validates them again before applying.
+const VISUALIZE_MODES := ["uv", "normals", "screen_pos", "world_pos", "custom", "off"]
 
 var _shader_type_regex := RegEx.new()
 var _diagnostic_collection_active := false
@@ -88,6 +97,24 @@ func process_command(client_id: int, command_type: String, params: Dictionary, c
 			return true
 		"shader_debug_overlay":
 			await _shader_debug_overlay(client_id, params, command_id)
+			return true
+		"shader_debug_visualize":
+			await _shader_debug_visualize(client_id, params, command_id)
+			return true
+		"shader_get_warnings":
+			await _shader_get_warnings(client_id, params, command_id)
+			return true
+		"shader_project_health":
+			await _shader_project_health(client_id, params, command_id)
+			return true
+		"shader_reset_uniforms":
+			await _shader_reset_uniforms(client_id, params, command_id)
+			return true
+		"shader_reload_from_disk":
+			await _shader_reload_from_disk(client_id, params, command_id)
+			return true
+		"shader_measure_frame_time":
+			await _shader_measure_frame_time(client_id, params, command_id)
 			return true
 		"capture_running_game":
 			await _capture_running_game(client_id, params, command_id)
@@ -226,6 +253,147 @@ func _get_compile_errors(client_id: int, params: Dictionary, command_id: String)
 		"success": true,
 		"diagnostics": diagnostics
 	}, command_id)
+
+
+# shader_get_warnings: enables shader warnings in ProjectSettings (a
+# documented side effect that persists to project.godot when a value actually
+# changes; in Godot 4.5 the debug defaults are already true, so usually
+# nothing is written), optionally force-recompiles the shader to capture
+# compile errors, and reports static warnings for the file.
+#
+# Warning detection note: Godot 4.5 does NOT route shader warnings through
+# the Logger (ShaderLanguage only produces them inside the shader text
+# editor), so warnings come from the static MCPShaderWarningScanner, gated by
+# the same ProjectSettings flags the engine uses.
+func _shader_get_warnings(client_id: int, params: Dictionary, command_id: String) -> void:
+	var script_path := str(params.get("script_path", ""))
+	var wait_ms := clampi(int(params.get("wait_ms", 0)), 0, MAX_COMPILE_ERROR_WAIT_MS)
+
+	var warnings_enabled := _enable_shader_warnings()
+
+	var normalized_path := ""
+	if not script_path.is_empty():
+		normalized_path = _normalize_shader_path(script_path)
+		if normalized_path.is_empty():
+			return _send_error(client_id, "Invalid shader path: '..' path segments are not allowed (paths must stay inside res://)", command_id)
+		if not FileAccess.file_exists(normalized_path):
+			return _send_error(client_id, "Shader file not found: %s" % normalized_path, command_id)
+
+	if wait_ms > 0:
+		await get_tree().create_timer(float(wait_ms) / 1000.0).timeout
+
+	var compile_errors: Array = []
+	var warnings: Array = []
+	if not normalized_path.is_empty():
+		# Force a fresh recompile so the shader state is current, then drain
+		# the error logger (marker-correlated) for compile errors.
+		compile_errors = await _collect_shader_diagnostics(normalized_path)
+		var scanner = _get_warning_scanner()
+		if scanner != null:
+			warnings = scanner.scan(_read_shader_file(normalized_path), normalized_path)
+
+	_send_success(client_id, {
+		"success": true,
+		"warnings_enabled": warnings_enabled,
+		"warnings": warnings,
+		"errors": compile_errors,
+		"total": warnings.size()
+	}, command_id)
+
+
+# shader_project_health: scans every .gdshader under res://, force-recompiles
+# each with the marker-correlated error logger (so one file's recompile
+# cannot contaminate another's results), and reports per-file errors and
+# static warnings.
+func _shader_project_health(client_id: int, params: Dictionary, command_id: String) -> void:
+	var wait_ms := clampi(int(params.get("wait_ms", HEALTH_DEFAULT_WAIT_MS)), 0, MAX_HEALTH_WAIT_MS)
+
+	var warnings_enabled := _enable_shader_warnings()
+
+	if wait_ms > 0:
+		await get_tree().create_timer(float(wait_ms) / 1000.0).timeout
+
+	var files := _list_gdshader_files()
+	var scanner = _get_warning_scanner()
+	var results := []
+	var files_with_errors := 0
+	var files_with_warnings := 0
+
+	for path in files:
+		var file_path := str(path)
+		var errors: Array = await _collect_shader_diagnostics(file_path)
+		var warnings: Array = []
+		if scanner != null:
+			warnings = scanner.scan(_read_shader_file(file_path), file_path)
+		if not errors.is_empty():
+			files_with_errors += 1
+		if not warnings.is_empty():
+			files_with_warnings += 1
+		results.append({
+			"path": file_path,
+			"errors": errors,
+			"warnings": warnings
+		})
+
+	_send_success(client_id, {
+		"success": true,
+		"total_files": files.size(),
+		"files_with_errors": files_with_errors,
+		"files_with_warnings": files_with_warnings,
+		"results": results,
+		"enabled_warnings": warnings_enabled
+	}, command_id)
+
+
+# Enables every debug/shader_language/warnings/* toggle in ProjectSettings
+# and persists the change (side effect documented in the tool description).
+# treat_warnings_as_errors is deliberately left off: warnings should be
+# reported, not turned into compile failures. Returns whether warnings are
+# enabled after the call.
+func _enable_shader_warnings() -> bool:
+	var changed := false
+	for prop in ProjectSettings.get_property_list():
+		var name: String = prop.get("name", "")
+		if not name.begins_with("debug/shader_language/warnings/"):
+			continue
+		if name == "debug/shader_language/warnings/treat_warnings_as_errors":
+			continue
+		if not bool(ProjectSettings.get_setting(name, false)):
+			ProjectSettings.set_setting(name, true)
+			changed = true
+	if changed:
+		ProjectSettings.save()
+	return true
+
+
+func _get_warning_scanner():
+	var scanner_script := load("res://addons/godot_mcp/mcp_shader_warning_scanner.gd")
+	if scanner_script == null:
+		return null
+	return scanner_script.new()
+
+
+# Lists every .gdshader file under res://, skipping the .godot cache dir.
+func _list_gdshader_files() -> Array:
+	var files := []
+	_collect_gdshader_files("res://", files)
+	return files
+
+
+func _collect_gdshader_files(dir_path: String, files: Array) -> void:
+	var dir := DirAccess.open(dir_path)
+	if dir == null:
+		return
+	dir.list_dir_begin()
+	var file_name := dir.get_next()
+	while file_name != "":
+		if dir.current_is_dir():
+			if file_name != "." and file_name != ".." and file_name != ".godot":
+				_collect_gdshader_files(dir_path + file_name + "/", files)
+		elif file_name.ends_with(".gdshader"):
+			files.append(dir_path + file_name)
+		file_name = dir.get_next()
+	dir.list_dir_end()
 
 # Writes content to shader_path and returns the diagnostics produced by the
 # editor's recompile of that file (empty when the shader compiled cleanly).
@@ -392,18 +560,25 @@ func _shader_get_uniforms(client_id: int, params: Dictionary, command_id: String
 
 func _shader_set_uniform(client_id: int, params: Dictionary, command_id: String) -> void:
 	var node_path := str(params.get("node_path", ""))
+	var shader_path := str(params.get("shader_path", ""))
 	var uniform_name := str(params.get("uniform_name", ""))
 	var value = params.get("value", null)
 	var material_slot := str(params.get("material_slot", "material"))
 	var allow_shared := bool(params.get("allow_shared", false))
 	var wait_ms := clampi(int(params.get("wait_ms", DEFAULT_RUNTIME_TIMEOUT_MS)), 0, MAX_RUNTIME_TIMEOUT_MS)
 
-	if node_path.is_empty():
-		return _send_error(client_id, "node_path parameter is required", command_id)
+	if node_path.is_empty() and shader_path.is_empty():
+		return _send_error(client_id, "Provide node_path or shader_path parameter", command_id)
 	if uniform_name.is_empty():
 		return _send_error(client_id, "uniform_name parameter is required", command_id)
 
-	var result := await _send_shader_request("set_uniform", [node_path, uniform_name, value, material_slot, allow_shared], wait_ms)
+	var normalized_path := ""
+	if not shader_path.is_empty():
+		normalized_path = _normalize_shader_path(shader_path)
+		if normalized_path.is_empty():
+			return _send_error(client_id, "Invalid shader path: '..' path segments are not allowed (paths must stay inside res://)", command_id)
+
+	var result := await _send_shader_request("set_uniform", [node_path, uniform_name, value, material_slot, allow_shared, normalized_path], wait_ms)
 	_finish_shader_runtime_request(client_id, result, command_id)
 
 
@@ -489,13 +664,74 @@ func _shader_debug_overlay(client_id: int, params: Dictionary, command_id: Strin
 	_finish_shader_runtime_request(client_id, result, command_id)
 
 
+func _shader_debug_visualize(client_id: int, params: Dictionary, command_id: String) -> void:
+	var node_path := str(params.get("node_path", ""))
+	var mode := str(params.get("mode", ""))
+	var expression := str(params.get("expression", ""))
+	var material_slot := str(params.get("material_slot", "material"))
+	var wait_ms := clampi(int(params.get("wait_ms", DEFAULT_RUNTIME_TIMEOUT_MS)), 0, MAX_RUNTIME_TIMEOUT_MS)
+
+	if node_path.is_empty():
+		return _send_error(client_id, "node_path parameter is required", command_id)
+	if mode.is_empty():
+		return _send_error(client_id, "mode parameter is required", command_id)
+	if not VISUALIZE_MODES.has(mode):
+		return _send_error(client_id, "Unknown mode '%s'; expected one of: %s" % [mode, ", ".join(VISUALIZE_MODES)], command_id)
+	if mode == "custom" and expression.strip_edges().is_empty():
+		return _send_error(client_id, "expression is required when mode=custom", command_id)
+
+	var result := await _send_shader_request("debug_visualize", [node_path, mode, expression, material_slot], wait_ms)
+	_finish_shader_runtime_request(client_id, result, command_id)
+
+
+func _shader_reset_uniforms(client_id: int, params: Dictionary, command_id: String) -> void:
+	var node_path := str(params.get("node_path", ""))
+	var material_slot := str(params.get("material_slot", "material"))
+	var wait_ms := clampi(int(params.get("wait_ms", DEFAULT_RUNTIME_TIMEOUT_MS)), 0, MAX_RUNTIME_TIMEOUT_MS)
+
+	if node_path.is_empty():
+		return _send_error(client_id, "node_path parameter is required", command_id)
+
+	var result := await _send_shader_request("reset_uniforms", [node_path, material_slot], wait_ms)
+	_finish_shader_runtime_request(client_id, result, command_id)
+
+
+func _shader_reload_from_disk(client_id: int, params: Dictionary, command_id: String) -> void:
+	var shader_path := str(params.get("shader_path", ""))
+	var node_path := str(params.get("node_path", ""))
+	var material_slot := str(params.get("material_slot", "material"))
+	var wait_ms := clampi(int(params.get("wait_ms", DEFAULT_RUNTIME_TIMEOUT_MS)), 0, MAX_RUNTIME_TIMEOUT_MS)
+
+	if shader_path.is_empty() and node_path.is_empty():
+		return _send_error(client_id, "Provide shader_path or node_path (with optional material_slot) to locate the shader", command_id)
+
+	var normalized_path := ""
+	if not shader_path.is_empty():
+		normalized_path = _normalize_shader_path(shader_path)
+		if normalized_path.is_empty():
+			return _send_error(client_id, "Invalid shader path: '..' path segments are not allowed (paths must stay inside res://)", command_id)
+
+	var result := await _send_shader_request("reload_from_disk", [normalized_path, node_path, material_slot], wait_ms)
+	_finish_shader_runtime_request(client_id, result, command_id)
+
+
+func _shader_measure_frame_time(client_id: int, params: Dictionary, command_id: String) -> void:
+	var enable: Variant = params.get("enable", null)
+	var viewport_index := int(params.get("viewport_index", 0))
+	var wait_ms := clampi(int(params.get("wait_ms", DEFAULT_RUNTIME_TIMEOUT_MS)), 0, MAX_RUNTIME_TIMEOUT_MS)
+
+	var result := await _send_shader_request("measure_frame_time", [enable, viewport_index], wait_ms)
+	_finish_shader_runtime_request(client_id, result, command_id)
+
+
 func _capture_running_game(client_id: int, params: Dictionary, command_id: String) -> void:
 	var output_path := str(params.get("output_path", ""))
 	var return_base64 := bool(params.get("return_base64", false))
 	var allow_large := bool(params.get("allow_large", false))
+	var node_path := str(params.get("node_path", ""))
 	var wait_ms := clampi(int(params.get("wait_ms", CAPTURE_DEFAULT_TIMEOUT_MS)), 0, MAX_RUNTIME_TIMEOUT_MS)
 
-	var result := await _send_shader_request("capture", [output_path, return_base64, allow_large], wait_ms)
+	var result := await _send_shader_request("capture", [output_path, return_base64, allow_large, node_path], wait_ms)
 	_finish_shader_runtime_request(client_id, result, command_id)
 
 

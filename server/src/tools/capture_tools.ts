@@ -25,6 +25,7 @@ interface CaptureRunningGameParams {
   return_base64?: boolean;
   allow_large?: boolean;
   wait_ms?: number;
+  node_path?: string;
 }
 
 /** Safety cap on capture area (width x height); mirrors the GDScript-side guard. */
@@ -108,7 +109,7 @@ export const captureTools: MCPTool[] = [
 
   {
     name: 'capture_running_game',
-    description: 'Capture the current rendered frame of the RUNNING game\'s root viewport (game must be running from the editor with the debugger attached). The PNG is saved under user://mcp_captures (or output_path) and returned as an image block so the AI can see the live game. Accepts up to one frame of latency: a change made in the same turn may still show the pre-change frame',
+    description: 'Capture the current rendered frame of the RUNNING game\'s root viewport (game must be running from the editor with the debugger attached). The PNG is saved under user://mcp_captures (or output_path) and returned as an image block so the AI can see the live game. Accepts up to one frame of latency: a change made in the same turn may still show the pre-change frame. Optional node_path crops the capture to a 2D node\'s (CanvasItem/Control) on-screen region; the reply then reports cropped: true plus the original frame dimensions. 3D nodes are rejected with a clean error',
     parameters: z.object({
       output_path: z.string().optional()
         .describe('Absolute or user:// path where the PNG should also be saved. Defaults to a file under user://mcp_captures.'),
@@ -118,8 +119,10 @@ export const captureTools: MCPTool[] = [
         .describe('Allow captures larger than 4,000,000 pixels. Defaults to false to protect memory.'),
       wait_ms: z.number().int().min(0).max(60000).optional()
         .describe('Max milliseconds to wait for the game reply (default 3000).'),
+      node_path: z.string().optional()
+        .describe('2D node path (CanvasItem/Control) in the running game to crop the capture to its on-screen region (e.g. "/root/TestMainScene/ShaderVisuals/SoloSprite"); 3D nodes are rejected.'),
     }),
-    execute: async ({ output_path, return_base64, allow_large, wait_ms }: CaptureRunningGameParams): Promise<MCPToolResult> => {
+    execute: async ({ output_path, return_base64, allow_large, wait_ms, node_path }: CaptureRunningGameParams): Promise<MCPToolResult> => {
       const godot = getGodotConnection();
 
       const params: Record<string, unknown> = {};
@@ -127,6 +130,7 @@ export const captureTools: MCPTool[] = [
       if (return_base64 !== undefined) params.return_base64 = return_base64;
       if (allow_large !== undefined) params.allow_large = allow_large;
       if (wait_ms !== undefined) params.wait_ms = wait_ms;
+      if (node_path !== undefined) params.node_path = node_path;
 
       try {
         const result = await godot.sendCommand<CommandResult>('capture_running_game', params);
@@ -151,7 +155,10 @@ export const captureTools: MCPTool[] = [
         }
 
         const filePath = result.file_path ?? result.absolute_path ?? 'a temporary file';
-        const text = `Running game frame captured and saved to ${filePath} (${result.width ?? '?'}x${result.height ?? '?'}).`;
+        let text = `Running game frame captured and saved to ${filePath} (${result.width ?? '?'}x${result.height ?? '?'}).`;
+        if (result.cropped === true) {
+          text += ` Cropped to the requested node region (original frame: ${result.original_width ?? '?'}x${result.original_height ?? '?'}).`;
+        }
 
         return {
           content: [

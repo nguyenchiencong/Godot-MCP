@@ -78,7 +78,7 @@ Call `debugger_enable_events` FIRST, before setting breakpoints, to receive real
 
 ### Shader debugging
 
-The live shader debugging loop (snapshots, uniform tweaks, frame capture, hot reload with rollback, debug-draw overlays) lives in [godot-shader-debugging](../godot-shader-debugging/SKILL.md); all of its tools require the game running in F5 mode.
+The live shader debugging loop (snapshots, uniform tweaks, frame capture, hot reload with rollback, debug-draw overlays) lives in [godot-shader-debugging](../godot-shader-debugging/SKILL.md); the runtime tools require the game running in F5 mode, while the editor-side `shader_get_warnings`/`shader_project_health` do not.
 
 ## Advanced features
 

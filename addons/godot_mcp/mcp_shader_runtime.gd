@@ -3,14 +3,18 @@ extends Node
 ##
 ## This script runs inside the GAME (not the editor), like mcp_input_handler.gd,
 ## and answers requests about ShaderMaterials in the live scene. It registers an
-## EngineDebugger message capture named "mcp_shader" and handles seven actions:
-##   mcp_shader:list_materials  -> [request_id, node_path, material_slot]
-##   mcp_shader:get_uniforms    -> [request_id, node_path, material_slot]
-##   mcp_shader:set_uniform     -> [request_id, node_path, uniform_name, value, material_slot, allow_shared]
-##   mcp_shader:debug_snapshot  -> [request_id, node_path, material_slot]
-##   mcp_shader:hot_reload      -> [request_id, shader_path, node_path, material_slot, content]
-##   mcp_shader:capture         -> [request_id, output_path, return_base64, allow_large]
-##   mcp_shader:debug_overlay   -> [request_id, mode, viewport_index]
+## EngineDebugger message capture named "mcp_shader" and handles these actions:
+##   mcp_shader:list_materials    -> [request_id, node_path, material_slot]
+##   mcp_shader:get_uniforms      -> [request_id, node_path, material_slot]
+##   mcp_shader:set_uniform       -> [request_id, node_path, uniform_name, value, material_slot, allow_shared, shader_path]
+##   mcp_shader:debug_snapshot    -> [request_id, node_path, material_slot]
+##   mcp_shader:hot_reload        -> [request_id, shader_path, node_path, material_slot, content]
+##   mcp_shader:capture           -> [request_id, output_path, return_base64, allow_large, node_path]
+##   mcp_shader:debug_overlay     -> [request_id, mode, viewport_index]
+##   mcp_shader:debug_visualize   -> [request_id, node_path, mode, expression, material_slot]
+##   mcp_shader:reset_uniforms    -> [request_id, node_path, material_slot]
+##   mcp_shader:reload_from_disk  -> [request_id, shader_path, node_path, material_slot]
+##   mcp_shader:measure_frame_time -> [request_id, enable, viewport_index]
 ##
 ## Every reply is sent with EngineDebugger.send_message("mcp_shader:result",
 ## [request_id, payload]) where payload is a Dictionary of fully serializable
@@ -39,6 +43,13 @@ const MAX_CAPTURE_PIXELS := 4000000
 # the renderer recompiles lazily on the next frame that uses the shader.
 const RELOAD_ERROR_WAIT_FRAMES := 3
 
+# Frames to wait after enabling render-time measurement before reading it:
+# the first frames after enabling report 0.0.
+const MEASURE_SETTLE_FRAMES := 3
+
+# Visualization modes accepted by the debug_visualize action.
+const VISUALIZE_MODES := ["uv", "normals", "screen_pos", "world_pos", "custom", "off"]
+
 # Debug-draw overlay modes accepted by the debug_overlay action. Overdraw is
 # intentionally excluded: it is inert on the Compatibility renderer.
 const DEBUG_OVERLAY_MODES := ["wireframe", "normal", "off"]
@@ -46,6 +57,14 @@ const DEBUG_OVERLAY_MODES := ["wireframe", "normal", "off"]
 var _uniform_regex := RegEx.new()
 var _shader_type_regex := RegEx.new()
 var _render_mode_regex := RegEx.new()
+
+# Active shader_debug_visualize injections, keyed by node_path:
+# { shader: Shader, code: String (original code), material_slot: String, mode: String }
+var _visualize_registry := {}
+
+# Per-viewport render-time measurement state (there is no RenderingServer
+# getter for the measure flag, so the last requested state is tracked here).
+var _measure_state := {}
 
 func _init() -> void:
 	_uniform_regex.compile(UNIFORM_REGEX_SOURCE)
@@ -108,6 +127,20 @@ func _on_capture(message: String, data: Array) -> bool:
 			return true
 		"debug_overlay":
 			return _handle_shader_debug_overlay(data)
+		"debug_visualize":
+			# Async handler: waits a few frames for compile feedback.
+			_handle_shader_debug_visualize(data)
+			return true
+		"reset_uniforms":
+			return _handle_shader_reset_uniforms(data)
+		"reload_from_disk":
+			# Async handler: waits a few frames for compile feedback.
+			_handle_shader_reload_from_disk(data)
+			return true
+		"measure_frame_time":
+			# Async handler: waits a few frames after enabling measurement.
+			_handle_shader_measure_frame_time(data)
+			return true
 
 	return false
 
@@ -232,10 +265,24 @@ func _handle_set_uniform(data: Array) -> bool:
 	var raw_value = data[3]
 	var material_slot := str(data[4]) if data.size() > 4 else "material"
 	var allow_shared := bool(data[5]) if data.size() > 5 else false
+	var shader_path := str(data[6]) if data.size() > 6 else ""
 
 	if uniform_name.is_empty():
 		_send_error(request_id, "uniform_name is required")
 		return true
+	if shader_path.is_empty() and node_path.is_empty():
+		_send_error(request_id, "Provide node_path or shader_path to locate the material")
+		return true
+	if not shader_path.is_empty() and not node_path.is_empty():
+		_send_error(request_id, "Provide either node_path or shader_path, not both")
+		return true
+
+	# Shader-wide scope: apply the uniform to every material using the shader.
+	# Materials shared by more than one node are skipped (recorded in
+	# "skipped") unless allow_shared is set; a shared material never fails
+	# the whole call.
+	if not shader_path.is_empty():
+		return _handle_set_uniform_shader_wide(request_id, shader_path, uniform_name, raw_value, material_slot, allow_shared)
 
 	var resolved := _resolve_material(node_path, material_slot)
 	if not resolved["ok"]:
@@ -288,6 +335,72 @@ func _handle_set_uniform(data: Array) -> bool:
 		"previous_value": previous_value,
 		"new_value": new_value,
 		"sharing": sharing
+	})
+	return true
+
+
+# Shader-wide variant of set_uniform (shader_path scope): applies the uniform
+# to every material in the running game whose shader matches shader_path.
+# Shared materials are skipped (with a recorded reason) unless allow_shared;
+# skipping never fails the whole call.
+func _handle_set_uniform_shader_wide(request_id: int, shader_path: String, uniform_name: String, raw_value: Variant, material_slot: String, allow_shared: bool) -> bool:
+	var found := _find_shader_materials(shader_path, "", material_slot)
+	if not found["ok"]:
+		_send_error(request_id, found["error"])
+		return true
+
+	var materials: Array = found["materials"]
+	if materials.is_empty():
+		_send_error(request_id, "No materials in the running game use shader at %s" % shader_path)
+		return true
+
+	# All matched materials share the same .gdshader file, so validate and
+	# coerce the value against the first shader's declaration.
+	var shader: Shader = materials[0]["shader"]
+	var uniform_def := _find_uniform_declaration(shader.code, uniform_name)
+	if uniform_def.is_empty():
+		var names := _declared_uniform_names(shader.code)
+		var known := ""
+		if not names.is_empty():
+			known = " Known uniforms: %s" % ", ".join(names)
+		_send_error(request_id, "Unknown uniform '%s' on shader %s.%s" % [uniform_name, shader.resource_path, known])
+		return true
+
+	var converted := _coerce_uniform_value(
+		uniform_def["_type_token"],
+		uniform_def["_hint_text"],
+		uniform_def["_is_array"],
+		int(uniform_def.get("array_size", -1)),
+		raw_value
+	)
+	if not converted["ok"]:
+		_send_error(request_id, converted["error"])
+		return true
+
+	var affected := []
+	var skipped := []
+	for entry in materials:
+		var material: ShaderMaterial = entry["material"]
+		var sharing := _find_material_sharing(material)
+		if sharing["users_count"] > 1 and not allow_shared:
+			skipped.append({
+				"node_path": entry["node_path"],
+				"reason": "shared by %d nodes; set allow_shared=true to modify" % sharing["users_count"]
+			})
+			continue
+		material.set_shader_parameter(uniform_name, converted["value"])
+		affected.append({
+			"node_path": entry["node_path"],
+			"material_path": entry["material_path"]
+		})
+
+	_send_result(request_id, {
+		"success": true,
+		"uniform_name": uniform_name,
+		"value": _serialize_value(converted["value"]),
+		"affected": affected,
+		"skipped": skipped,
+		"count": affected.size()
 	})
 	return true
 
@@ -445,6 +558,7 @@ func _handle_capture(data: Array) -> bool:
 	var output_path := str(data[1]) if data.size() > 1 else ""
 	var return_base64 := bool(data[2]) if data.size() > 2 else false
 	var allow_large := bool(data[3]) if data.size() > 3 else false
+	var node_path := str(data[4]) if data.size() > 4 else ""
 
 	await RenderingServer.frame_post_draw
 
@@ -453,6 +567,27 @@ func _handle_capture(data: Array) -> bool:
 		_send_error(request_id, "Failed to read the rendered frame from the root viewport")
 		return true
 
+	var original_width := img.get_width()
+	var original_height := img.get_height()
+	var cropped := false
+
+	# Optional node_path crop: restrict the capture to the node's on-screen
+	# region. Only 2D nodes (CanvasItem/Control) are supported in v1.
+	if not node_path.is_empty():
+		var crop := _resolve_node_crop_rect(node_path, Vector2(original_width, original_height))
+		if not crop["ok"]:
+			_send_error(request_id, crop["error"])
+			return true
+		var crop_rect: Rect2i = crop["rect"]
+		crop_rect = crop_rect.intersection(Rect2i(0, 0, original_width, original_height))
+		if crop_rect.size.x <= 0 or crop_rect.size.y <= 0:
+			_send_error(request_id, "Node %s is off-screen or has empty bounds within the viewport" % node_path)
+			return true
+		img = img.get_region(crop_rect)
+		cropped = true
+
+	# The 4MP cap applies to the final capture size (the cropped size when a
+	# node_path crop is active).
 	if img.get_width() * img.get_height() > MAX_CAPTURE_PIXELS and not allow_large:
 		_send_error(request_id, "Capture size %dx%d exceeds the 4MP default limit; set allow_large=true to override" % [img.get_width(), img.get_height()])
 		return true
@@ -472,13 +607,57 @@ func _handle_capture(data: Array) -> bool:
 		"file_path": save_path,
 		"absolute_path": ProjectSettings.globalize_path(save_path),
 		"width": img.get_width(),
-		"height": img.get_height()
+		"height": img.get_height(),
+		"original_width": original_width,
+		"original_height": original_height,
+		"cropped": cropped
 	}
 	if return_base64:
 		result["image_base64"] = Marshalls.raw_to_base64(bytes)
 
 	_send_result(request_id, result)
 	return true
+
+
+# Computes the on-screen pixel rect of a node in viewport coordinates, for
+# capture cropping. CanvasItems use get_global_transform_with_canvas() applied
+# to the node's local bounds (get_rect() when available, else a 1x1 point);
+# Controls use get_global_rect(). Returns { ok, rect: Rect2i, error }.
+func _resolve_node_crop_rect(node_path: String, viewport_size: Vector2) -> Dictionary:
+	var node := _find_node(node_path)
+	if node == null:
+		return { "ok": false, "error": "Node not found in running game: %s" % node_path }
+
+	if node is Node3D and not node is CanvasItem:
+		return { "ok": false, "error": "node_path cropping is only supported for 2D nodes (CanvasItem/Control) in v1; %s is a %s" % [node_path, node.get_class()] }
+
+	var global_rect := Rect2()
+	if node is Control:
+		global_rect = (node as Control).get_global_rect()
+	elif node is CanvasItem:
+		var item := node as CanvasItem
+		var local_rect := Rect2(Vector2.ZERO, Vector2.ONE)
+		if node.has_method("get_rect"):
+			var node_rect: Variant = node.call("get_rect")
+			if node_rect is Rect2:
+				local_rect = node_rect
+		global_rect = item.get_global_transform_with_canvas() * local_rect
+	else:
+		return { "ok": false, "error": "node_path cropping is only supported for 2D nodes (CanvasItem/Control) in v1; %s is a %s" % [node_path, node.get_class()] }
+
+	var clipped := global_rect.intersection(Rect2(Vector2.ZERO, viewport_size))
+	if clipped.size.x <= 0.0 or clipped.size.y <= 0.0:
+		return { "ok": false, "error": "Node %s is off-screen or has empty bounds within the viewport" % node_path }
+
+	return {
+		"ok": true,
+		"rect": Rect2i(
+			floori(clipped.position.x),
+			floori(clipped.position.y),
+			maxi(1, ceili(clipped.size.x)),
+			maxi(1, ceili(clipped.size.y))
+		)
+	}
 
 
 # Applies a Viewport debug-draw mode in the running game for visual shader
@@ -539,6 +718,474 @@ func _handle_shader_debug_overlay(data: Array) -> bool:
 		payload["caveat"] = caveat
 
 	_send_result(request_id, payload)
+	return true
+
+
+# ---------------------------------------------------------------------------
+# Phase D runtime handlers
+# ---------------------------------------------------------------------------
+
+# Temporarily injects visualization code into the RUNNING game's shader for
+# one material (node_path). Never writes files: the modified code lives only
+# in the live Shader resource and is restored exactly by mode=off (registry
+# stores the original Shader + code + slot). If the injected variant fails to
+# compile, the original code is restored and the compile errors reported.
+func _handle_shader_debug_visualize(data: Array) -> bool:
+	if data.size() < 3:
+		return false
+
+	var request_id := int(data[0])
+	var node_path := str(data[1])
+	var mode := str(data[2])
+	var expression := str(data[3]) if data.size() > 3 else ""
+	var material_slot := str(data[4]) if data.size() > 4 else "material"
+
+	if not VISUALIZE_MODES.has(mode):
+		_send_error(request_id, "Unknown mode '%s'; expected one of: %s" % [mode, ", ".join(VISUALIZE_MODES)])
+		return true
+	if mode == "custom" and expression.strip_edges().is_empty():
+		_send_error(request_id, "expression is required when mode=custom")
+		return true
+
+	if mode == "off":
+		return _restore_visualization(request_id, node_path)
+
+	var resolved := _resolve_material(node_path, material_slot)
+	if not resolved["ok"]:
+		_send_error(request_id, resolved["error"])
+		return true
+
+	var material: ShaderMaterial = resolved["material"]
+	var shader := material.shader
+	if shader == null:
+		_send_error(request_id, "Material on %s has no shader" % resolved["node_path"])
+		return true
+
+	var shader_type := _shader_type_of(shader.code)
+	if shader_type != "canvas_item" and shader_type != "spatial":
+		_send_error(request_id, "shader_debug_visualize supports only canvas_item and spatial shaders; found '%s'" % shader_type)
+		return true
+
+	var injected := _build_visualization_code(shader.code, shader_type, mode, expression)
+	if not injected["ok"]:
+		_send_error(request_id, injected["error"])
+		return true
+
+	# Register before applying so mode=off can restore exactly even when the
+	# injected variant fails to compile. The FIRST recorded code is kept across
+	# mode switches: changing uv->normals without an intermediate mode=off must
+	# still restore the genuine original baseline, not the prior injection.
+	var original_code := shader.code
+	var is_first := not _visualize_registry.has(node_path)
+	var previous_mode := ""
+	if is_first:
+		_visualize_registry[node_path] = {
+			"shader": shader,
+			"code": original_code,
+			"material_slot": material_slot,
+			"mode": mode
+		}
+	else:
+		var existing: Dictionary = _visualize_registry[node_path]
+		previous_mode = str(existing.get("mode", mode))
+		existing["mode"] = mode
+	shader.code = injected["code"]
+
+	# Give the renderer a few frames to lazily compile the injected code, then
+	# drain any compile errors the game-side logger captured in that window.
+	var logger = _get_shader_logger()
+	var marker: int = logger.record_marker() if logger != null else -1
+	for _i in range(RELOAD_ERROR_WAIT_FRAMES):
+		await get_tree().process_frame
+	var compile_errors := []
+	if logger != null:
+		compile_errors = _entries_to_diagnostics(logger.drain_since(marker), shader.resource_path)
+
+	var rolled_back := false
+	if not compile_errors.is_empty():
+		# Restore the code that was live before this injection. When this was
+		# the first (or only) active visualization, drop the registry entry;
+		# otherwise keep the original baseline and revert the recorded mode so
+		# a later mode=off still restores the genuine original.
+		shader.code = original_code
+		if is_first:
+			_visualize_registry.erase(node_path)
+		else:
+			_visualize_registry[node_path]["mode"] = previous_mode
+		rolled_back = true
+
+	_send_result(request_id, {
+		"success": true,
+		"mode": mode,
+		"shader_type": shader_type,
+		"injected": injected["snippet"],
+		"original_code": original_code,
+		"compile_errors": compile_errors,
+		"rolled_back": rolled_back,
+		"restore_note": "call shader_debug_visualize with mode=off to restore",
+		"renderer": str(RenderingServer.get_current_rendering_method())
+	})
+	return true
+
+
+# Restores the original shader code for a node with an active visualization.
+# Replies with restored=false when nothing is registered for the node.
+func _restore_visualization(request_id: int, node_path: String) -> bool:
+	if not _visualize_registry.has(node_path):
+		_send_result(request_id, {
+			"success": true,
+			"mode": "off",
+			"restored": false,
+			"note": "Nothing to restore for %s: no active visualization registered" % node_path
+		})
+		return true
+
+	var entry: Dictionary = _visualize_registry[node_path]
+	var shader: Shader = entry["shader"]
+	shader.code = entry["code"]
+	_visualize_registry.erase(node_path)
+
+	_send_result(request_id, {
+		"success": true,
+		"mode": "off",
+		"restored": true,
+		"previous_mode": entry["mode"],
+		"shader_type": _shader_type_of(entry["code"]),
+		"renderer": str(RenderingServer.get_current_rendering_method())
+	})
+	return true
+
+
+# Builds the injected shader code for a visualization mode. Returns
+# { ok, code, snippet, error }. Only canvas_item and spatial are supported;
+# statements are appended to the existing fragment()/vertex() bodies (created
+# when missing), and world_pos adds a global varying.
+func _build_visualization_code(code: String, shader_type: String, mode: String, expression: String) -> Dictionary:
+	var is_canvas := shader_type == "canvas_item"
+	var out_name := "COLOR" if is_canvas else "ALBEDO"
+
+	var fragment_statement := ""
+	var snippet := ""
+	match mode:
+		"uv":
+			fragment_statement = "%s = vec4(UV, 0.0, 1.0);" % out_name if is_canvas else "%s = vec3(UV, 0.0);" % out_name
+			snippet = fragment_statement
+		"normals":
+			fragment_statement = "%s = vec4(NORMAL * 0.5 + 0.5, 1.0);" % out_name if is_canvas else "%s = NORMAL * 0.5 + 0.5;" % out_name
+			snippet = fragment_statement
+		"screen_pos":
+			fragment_statement = "%s = vec4(fract(FRAGCOORD.xy * 0.01), 0.0, 1.0);" % out_name if is_canvas else "%s = vec3(fract(FRAGCOORD.xy * 0.01), 0.0);" % out_name
+			snippet = fragment_statement
+		"custom":
+			fragment_statement = "%s = %s;" % [out_name, expression.strip_edges()]
+			snippet = fragment_statement
+		"world_pos":
+			var varying := "varying vec3 mcp_world_pos;"
+			# VERTEX is vec3 in spatial but vec2 in canvas_item, so the canvas
+			# variant needs an explicit z component for the vec4 swizzle.
+			var vertex_statement := "mcp_world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;" if not is_canvas else "mcp_world_pos = (MODEL_MATRIX * vec4(VERTEX, 0.0, 1.0)).xyz;"
+			fragment_statement = "%s = vec4(mcp_world_pos * 0.1, 1.0);" % out_name if is_canvas else "%s = mcp_world_pos * 0.1;" % out_name
+			snippet = "%s\n%s\n%s" % [varying, vertex_statement, fragment_statement]
+
+			# The varying must be declared at global scope BEFORE any function
+			# that references it. Godot's shader language rejects forward
+			# references to varyings (verified on 4.5: "Unknown identifier"
+			# when a varying is appended after the functions that use it), so
+			# it is inserted right after the shader_type/render_mode header.
+			code = _insert_global_declaration(code, varying)
+
+			var vertex_injected := _inject_statement_into_function(code, "vertex", vertex_statement)
+			if not vertex_injected["ok"]:
+				return { "ok": false, "error": vertex_injected["error"] }
+			code = vertex_injected["code"]
+		_:
+			return { "ok": false, "error": "Mode '%s' is not supported by shader_debug_visualize" % mode }
+
+	var fragment_injected := _inject_statement_into_function(code, "fragment", fragment_statement)
+	if not fragment_injected["ok"]:
+		return { "ok": false, "error": fragment_injected["error"] }
+
+	return { "ok": true, "code": fragment_injected["code"], "snippet": snippet }
+
+
+# Appends `statement` to the body of `function_name` (inserted before the
+# closing brace). When the function does not exist, a new `void <name>()`
+# function is appended to the source. Returns { ok, code, error }.
+func _inject_statement_into_function(code: String, function_name: String, statement: String) -> Dictionary:
+	var function_regex := RegEx.new()
+	function_regex.compile("(?:^|\n)\\s*(?:[A-Za-z_][A-Za-z0-9_]*\\s+)?" + function_name + "\\s*\\(\\s*\\)\\s*\\{")
+	var match := function_regex.search(code)
+	if match == null:
+		# No existing function: append a new one at the end of the file.
+		var new_function := "\n\nvoid %s() {\n\t%s\n}\n" % [function_name, statement]
+		return { "ok": true, "code": code + new_function }
+
+	# Brace-match from the opening brace to find the closing one.
+	var body_start := match.get_end() - 1
+	var depth := 0
+	var close_pos := -1
+	for i in range(body_start, code.length()):
+		var c := code[i]
+		if c == "{":
+			depth += 1
+		elif c == "}":
+			depth -= 1
+			if depth == 0:
+				close_pos = i
+				break
+	if close_pos == -1:
+		return { "ok": false, "error": "Failed to locate the closing brace of %s()" % function_name }
+
+	var injected_code := code.substr(0, close_pos) + "\n\t" + statement + code.substr(close_pos)
+	return { "ok": true, "code": injected_code }
+
+
+# Inserts a global-scope declaration (e.g. a varying) right after the
+# shader_type/render_mode header, before any function definition. Godot's
+# shader language requires varyings to be declared before the functions that
+# reference them, so the declaration cannot simply be appended at the end.
+func _insert_global_declaration(code: String, declaration: String) -> String:
+	var header_end := 0
+	var shader_type_match := _shader_type_regex.search(code)
+	if shader_type_match != null:
+		header_end = shader_type_match.get_end()
+	var render_mode_match := _render_mode_regex.search(code)
+	if render_mode_match != null and render_mode_match.get_end() > header_end:
+		header_end = render_mode_match.get_end()
+	# Position at the end of the header line (after its newline) so the
+	# declaration lands at the start of global scope, not mid-line.
+	var line_end := code.find("\n", header_end)
+	if line_end == -1:
+		line_end = code.length()
+	return code.substr(0, line_end) + "\n" + declaration + code.substr(line_end)
+
+
+# Resets every shader parameter of the material to its declared default.
+# Defaults come from Shader.get_shader_uniform_list() when the engine
+# provides them (it does not in Godot 4.5: the entries are PropertyInfo
+# dicts without default_value), falling back to the regex-parsed defaults;
+# a null default clears the parameter override so the engine default applies.
+func _handle_shader_reset_uniforms(data: Array) -> bool:
+	if data.size() < 2:
+		return false
+
+	var request_id := int(data[0])
+	var node_path := str(data[1])
+	var material_slot := str(data[2]) if data.size() > 2 else "material"
+
+	var resolved := _resolve_material(node_path, material_slot)
+	if not resolved["ok"]:
+		_send_error(request_id, resolved["error"])
+		return true
+
+	var material: ShaderMaterial = resolved["material"]
+	var shader := material.shader
+	if shader == null:
+		_send_error(request_id, "Material on %s has no shader" % resolved["node_path"])
+		return true
+
+	var uniform_list: Array = shader.get_shader_uniform_list()
+	var defaults_by_name := {}
+	for uniform_entry in _parse_shader_uniforms(shader.code):
+		defaults_by_name[str(uniform_entry["name"])] = uniform_entry["default"]
+
+	var reset := []
+	for entry in uniform_list:
+		var name := str(entry.get("name", ""))
+		if name.is_empty():
+			continue
+		var default_value: Variant = null
+		if entry.has("default_value"):
+			default_value = entry["default_value"]
+		elif defaults_by_name.has(name):
+			default_value = defaults_by_name[name]
+		# No declared default (array/sampler without one): null clears the
+		# override, which is exactly the shader's built-in default.
+		material.set_shader_parameter(name, default_value)
+		reset.append({ "name": name, "value": _serialize_value(default_value) })
+
+	_send_result(request_id, {
+		"success": true,
+		"node_path": resolved["node_path"],
+		"slot": resolved["slot"],
+		"reset": reset,
+		"count": reset.size()
+	})
+	return true
+
+
+# Reloads a shader's code from its .gdshader file on disk and applies it live
+# to every material using the shader (same lookup as shader_hot_reload). When
+# the live code already equals the disk content, replies unchanged=true and
+# skips the reapply. previous_code is the rollback path: re-call with the
+# shader code set back to it via shader_hot_reload.
+func _handle_shader_reload_from_disk(data: Array) -> bool:
+	if data.size() < 4:
+		return false
+
+	var request_id := int(data[0])
+	var shader_path := str(data[1])
+	var node_path := str(data[2])
+	var material_slot := str(data[3]) if data.size() > 3 else "material"
+
+	if shader_path.is_empty() and node_path.is_empty():
+		_send_error(request_id, "Provide shader_path or node_path")
+		return true
+
+	var found := _find_shader_materials(shader_path, node_path, material_slot)
+	if not found["ok"]:
+		_send_error(request_id, found["error"])
+		return true
+
+	var resolved_path := str(found["shader_path"])
+	if resolved_path.is_empty() or resolved_path == "local" or not resolved_path.ends_with(".gdshader"):
+		_send_error(request_id, "Shader is not a standalone .gdshader file (%s); reload from disk requires a res:// file" % resolved_path)
+		return true
+
+	var file := FileAccess.open(resolved_path, FileAccess.READ)
+	if file == null:
+		_send_error(request_id, "Failed to read shader file from disk: %s" % resolved_path)
+		return true
+	var disk_content := file.get_as_text()
+	file = null  # Close the file
+
+	var materials: Array = found["materials"]
+	if materials.is_empty():
+		_send_error(request_id, "No materials in the running game use shader at %s" % resolved_path)
+		return true
+
+	var previous_code := ""
+	for entry in materials:
+		var shader: Shader = entry["shader"]
+		if shader != null:
+			previous_code = shader.code
+			break
+
+	var affected := []
+	for entry in materials:
+		affected.append({
+			"node_path": entry["node_path"],
+			"slot": entry["slot"],
+			"material_path": entry["material_path"]
+		})
+
+	if previous_code == disk_content:
+		_send_result(request_id, {
+			"success": true,
+			"shader_path": resolved_path,
+			"affected_materials": affected,
+			"applied_code": disk_content,
+			"previous_code": previous_code,
+			"file_read": true,
+			"file_error": "",
+			"compile_errors": [],
+			"unchanged": true
+		})
+		return true
+
+	# Apply the disk content to every distinct Shader instance among the
+	# matched materials (same semantics as hot reload).
+	var seen_shaders := {}
+	for entry in materials:
+		var shader: Shader = entry["shader"]
+		if shader == null:
+			continue
+		var shader_id := shader.get_instance_id()
+		if seen_shaders.has(shader_id):
+			continue
+		seen_shaders[shader_id] = true
+		shader.code = disk_content
+
+	# Re-apply existing parameter values through the shared coercion helper so
+	# values keep working when the disk content changed a uniform's type.
+	var uniforms := _parse_shader_uniforms(disk_content)
+	for entry in materials:
+		var material: ShaderMaterial = entry["material"]
+		for uniform_entry in uniforms:
+			var name := str(uniform_entry["name"])
+			var raw_value = material.get_shader_parameter(name)
+			if raw_value is Texture2D or raw_value is Texture3D or raw_value is TextureLayered:
+				if raw_value.resource_path.is_empty():
+					continue
+			var converted := _coerce_uniform_value(
+				str(uniform_entry["_type_token"]),
+				str(uniform_entry["_hint_text"]),
+				bool(uniform_entry["_is_array"]),
+				int(uniform_entry.get("array_size", -1)),
+				raw_value
+			)
+			if converted["ok"]:
+				material.set_shader_parameter(name, converted["value"])
+
+	# Give the renderer a few frames to lazily compile the new code, then drain
+	# any shader compile errors the game-side logger captured in that window.
+	var logger = _get_shader_logger()
+	var marker: int = logger.record_marker() if logger != null else -1
+	for _i in range(RELOAD_ERROR_WAIT_FRAMES):
+		await get_tree().process_frame
+	var compile_errors := []
+	if logger != null:
+		compile_errors = _entries_to_diagnostics(logger.drain_since(marker), resolved_path)
+
+	_send_result(request_id, {
+		"success": true,
+		"shader_path": resolved_path,
+		"affected_materials": affected,
+		"applied_code": disk_content,
+		"previous_code": previous_code,
+		"file_read": true,
+		"file_error": "",
+		"compile_errors": compile_errors,
+		"unchanged": false
+	})
+	return true
+
+
+# Reads (and optionally toggles) the viewport's render-time measurement.
+# Units are milliseconds (verified empirically against the running game on
+# Godot 4.5.1 Forward+). enable omitted -> read without changing state;
+# enable=true -> enable then wait a few frames (first frames report 0.0);
+# enable=false -> disable and read the last measured values.
+func _handle_shader_measure_frame_time(data: Array) -> bool:
+	if data.size() < 1:
+		return false
+
+	var request_id := int(data[0])
+	var has_enable := data.size() > 1 and data[1] != null
+	var enable := bool(data[1]) if has_enable else false
+	var viewport_index := int(data[2]) if data.size() > 2 else 0
+
+	var resolved := _resolve_debug_overlay_viewport(viewport_index)
+	if not resolved["ok"]:
+		_send_error(request_id, resolved["error"])
+		return true
+
+	var viewport: Viewport = resolved["viewport"]
+	var rid := viewport.get_viewport_rid()
+
+	if has_enable:
+		RenderingServer.viewport_set_measure_render_time(rid, enable)
+		_measure_state[rid] = enable
+
+	if has_enable and enable:
+		# The first frames after enabling report 0.0; let the measurement
+		# settle before reading.
+		for _i in range(MEASURE_SETTLE_FRAMES):
+			await get_tree().process_frame
+
+	var gpu_ms := float(RenderingServer.viewport_get_measured_render_time_gpu(rid))
+	var cpu_ms := float(RenderingServer.viewport_get_measured_render_time_cpu(rid))
+	var enabled := bool(_measure_state.get(rid, false))
+
+	_send_result(request_id, {
+		"success": true,
+		"gpu_ms": gpu_ms,
+		"cpu_ms": cpu_ms,
+		"enabled": enabled,
+		"viewport_index": viewport_index,
+		"renderer": str(RenderingServer.get_current_rendering_method()),
+		"note": "Measurement is per-viewport, not per-shader; to compare shaders, toggle the shader change and measure again"
+	})
 	return true
 
 

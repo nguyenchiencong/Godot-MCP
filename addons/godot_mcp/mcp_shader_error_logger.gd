@@ -6,6 +6,18 @@ extends Logger
 # into a thread-safe buffer so MCP shader commands can correlate compile
 # results with their own writes.
 #
+# Severity note (investigated on Godot 4.5.1): shader WARNINGS never reach
+# this logger. ShaderLanguage only collects warnings when
+# enable_warning_checking() is enabled, and the only caller in the engine is
+# the shader text editor (editor/shader/text_shader_editor.cpp); the
+# renderer's compile path never enables warning checking, and
+# _err_print_error(ERR_HANDLER_SHADER) is invoked for errors only. Verified
+# empirically: with all debug/shader_language/warnings/* settings on, a
+# shader full of unused declarations produces zero entries here. shader
+# warnings are therefore reported by the static MCPShaderWarningScanner
+# (mcp_shader_warning_scanner.gd) instead; every entry in this buffer is a
+# genuine compile error with severity "error".
+#
 # The engine invokes _log_error() from arbitrary threads (renderer worker
 # threads included), possibly concurrently, so every access to the buffer is
 # guarded by a Mutex. Never call print()/push_error() inside _log_error():
