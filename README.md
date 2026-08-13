@@ -79,6 +79,32 @@ godot-mcp install-addon "path/to/your/project"
 
 Or manually copy the `addons/godot_mcp` folder to your Godot project's `addons` directory.
 
+### Agent Skills
+
+The package bundles agent skills that teach AI assistants how to use the godot-mcp CLI for common Godot tasks: setup, scene editing, scripting, debugging, shader debugging, input testing, and the daily dev workflow.
+
+Install all bundled skills into any repository (not just Godot projects):
+
+```bash
+godot-mcp install-skills "path/to/your/project"
+```
+
+This installs the skills to `<project>/.agents/skills/`, replacing previous copies of these skills while leaving unrelated skills in that directory untouched. Re-run the command to keep them up to date.
+
+| Skill | Covers |
+|-------|--------|
+| godot-mcp-quickstart | Setup and connectivity: addon install, plugin enable, tool discovery, troubleshooting |
+| godot-dev-workflow | The daily inspect-edit-run-verify-fix loop |
+| godot-scene-editing | Scenes and nodes: structure, create/edit nodes, properties, transforms, capture |
+| godot-scripting | GDScript and shader authoring: parse diagnostics, editor script execution, project guidance |
+| godot-debugging | Debugger integration: breakpoints, pause/resume/step, call stacks, debug output |
+| godot-shader-debugging | Live shader debugging in the running game: snapshot, uniforms, visualize, hot reload, frame times |
+| godot-input-testing | Input simulation: actions, keyboard, mouse, sequences |
+
+Agents load a skill based on its `description` frontmatter when a task matches; for example, a request to set a breakpoint loads godot-debugging. For user-level installs, copy `skills/` to `~/.agents/skills/` or `~/.pi/agent/skills/`.
+
+See [skills/README.md](skills/README.md) for the full skill guide.
+
 ### 2. Enable the Plugin in Godot
 
 1. Open your project in Godot
@@ -183,6 +209,7 @@ For direct MCP client integration, add this configuration:
 - [Command Reference](docs/command-reference.md)
 - [Architecture](docs/architecture.md)
 - [CLI Usage](docs/cli.md)
+- [Agent Skills Guide](skills/README.md)
 - [Tool Prompt Guide](docs/tool-prompt-guide.md)
 
 ## Contributing

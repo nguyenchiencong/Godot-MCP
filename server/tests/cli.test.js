@@ -172,6 +172,55 @@ async function testInstallAddon() {
   await fs.rm(tmpDir, { recursive: true, force: true });
 }
 
+async function testInstallSkills() {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'godot-mcp-cli-skills-'));
+  // No project.godot needed: skills install into any repository
+
+  const result = await runCli(['install-skills', tmpDir]);
+  if (result.code !== 0) {
+    throw new Error(`install-skills failed: ${result.stderr}`);
+  }
+
+  const skillNames = [
+    'godot-debugging',
+    'godot-dev-workflow',
+    'godot-input-testing',
+    'godot-mcp-quickstart',
+    'godot-scene-editing',
+    'godot-scripting',
+    'godot-shader-debugging',
+  ];
+
+  for (const name of skillNames) {
+    const skillFile = path.join(tmpDir, '.agents', 'skills', name, 'SKILL.md');
+    const exists = await fs
+      .access(skillFile)
+      .then(() => true)
+      .catch(() => false);
+    if (!exists) {
+      throw new Error(`Skill ${name} was not installed`);
+    }
+  }
+
+  const readmeFile = path.join(tmpDir, '.agents', 'skills', 'README.md');
+  const readmeExists = await fs
+    .access(readmeFile)
+    .then(() => true)
+    .catch(() => false);
+  if (!readmeExists) {
+    throw new Error('Skills README.md was not installed');
+  }
+
+  // Re-run to prove the clean reinstall is idempotent
+  const secondResult = await runCli(['install-skills', tmpDir]);
+  if (secondResult.code !== 0) {
+    throw new Error(`install-skills second run failed: ${secondResult.stderr}`);
+  }
+
+  // Clean up temp dir
+  await fs.rm(tmpDir, { recursive: true, force: true });
+}
+
 async function main() {
   await testListTools();
   await testEchoText();
@@ -180,6 +229,7 @@ async function main() {
   await testMissingToolFails();
   await testInvalidParamsFails();
   await testInstallAddon();
+  await testInstallSkills();
   console.log('CLI tests passed');
 }
 

@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.5.0 - 2026-08-13
+
+### Added
+- `godot-mcp install-skills <path-to-project>` CLI command that installs all bundled agent skills from `skills/` into `<project>/.agents/skills/` with clean, non-destructive updates (only the bundled skill folders and README are replaced; unrelated skills are preserved)
+
 ## 1.4.0 - 2026-08-06
 
 ### Added

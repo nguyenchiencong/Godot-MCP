@@ -23,7 +23,15 @@ Agent skills for using the godot-mcp-cli project: a CLI (`godot-mcp`) and MCP se
 
 ## Installation
 
-Copy the `skills/` folder (or individual skill folders) to a skills directory your agent reads:
+For project-level installs, the recommended way is the CLI:
+
+```bash
+godot-mcp install-skills "path/to/your/project"
+```
+
+This installs all bundled skills to `<project>/.agents/skills/`, replacing any previous copies of these skills while leaving unrelated skills in that directory untouched.
+
+You can also copy the `skills/` folder (or individual skill folders) to a skills directory your agent reads:
 
 - Global (user-level): `~/.agents/skills/` or `~/.pi/agent/skills/`
 - Project-level: `.agents/skills/` in the repository root

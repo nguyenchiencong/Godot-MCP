@@ -19,6 +19,7 @@ cd server && npm run build && npm link
 - Call with params: `godot-mcp debugger_set_breakpoint --script-path res://test_debugger.gd --line 42`
 - Call with JSON params (must be a JSON object): `godot-mcp get_stack_frames_panel --params-json '{"session_id":1}' --raw`
 - Install/update addon into a Godot project: `godot-mcp install-addon "path/to/project"`
+- Install skills into a project: `godot-mcp install-skills "path/to/project"`
 - Reload operations:
   - `godot-mcp rescan_filesystem` - detect external file changes
   - `godot-mcp reload_scene` - reload current scene from disk

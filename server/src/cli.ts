@@ -13,7 +13,7 @@ import { constants as fsConstants } from 'node:fs';
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json');
 
-type CliAction = 'list' | 'help' | 'call' | 'install';
+type CliAction = 'list' | 'help' | 'call' | 'install' | 'install-skills';
 
 type ParsedArgs = {
   action: CliAction;
@@ -128,6 +128,14 @@ function parseArgs(argv: string[]): ParsedArgs {
     action = 'install';
     if (!args[1]) {
       console.error('Missing target path for install-addon');
+      process.exit(1);
+    }
+    installTarget = args[1];
+    args.splice(0, 2);
+  } else if (args[0] === 'install-skills') {
+    action = 'install-skills';
+    if (!args[1]) {
+      console.error('Missing target path for install-skills');
       process.exit(1);
     }
     installTarget = args[1];
@@ -289,6 +297,64 @@ async function copyAddon(targetProjectPath: string): Promise<void> {
   console.log(`Installed addon to ${targetAddonDir}`);
 }
 
+async function copySkills(targetProjectPath: string): Promise<void> {
+  const projectPath = path.resolve(targetProjectPath);
+
+  const skillsCandidates = [
+    // npm package layout: <pkg>/dist/cli.js -> <pkg>/skills
+    path.resolve(__dirname, '..', 'skills'),
+    // repo layout: server/dist/cli.js -> <repo>/skills
+    path.resolve(__dirname, '..', '..', 'skills'),
+  ];
+
+  let sourceSkillsDir: string | undefined;
+  for (const candidate of skillsCandidates) {
+    if (await pathExists(candidate)) {
+      sourceSkillsDir = candidate;
+      break;
+    }
+  }
+
+  if (!sourceSkillsDir) {
+    throw new Error(`Source skills directory not found. Tried: ${skillsCandidates.join(', ')}`);
+  }
+
+  const targetSkillsDir = path.join(projectPath, '.agents', 'skills');
+  if (path.resolve(sourceSkillsDir) === path.resolve(targetSkillsDir)) {
+    throw new Error(
+      `Source and target skills directories resolve to the same path: ${sourceSkillsDir}`
+    );
+  }
+
+  const sourceEntries = await fs.readdir(sourceSkillsDir, { withFileTypes: true });
+  const skillFolders = sourceEntries.filter(entry => entry.isDirectory());
+  if (skillFolders.length === 0) {
+    throw new Error(`No skill folders found in source skills directory ${sourceSkillsDir}`);
+  }
+
+  await fs.mkdir(targetSkillsDir, { recursive: true });
+
+  // Remove only the top-level entries that exist in the source (skill folders
+  // and README.md) so unrelated skills in the target are preserved.
+  for (const entry of sourceEntries) {
+    const targetEntry = path.join(targetSkillsDir, entry.name);
+    if (await pathExists(targetEntry)) {
+      await fs.rm(targetEntry, { recursive: true, force: true });
+    }
+  }
+
+  for (const entry of sourceEntries) {
+    await fs.cp(path.join(sourceSkillsDir, entry.name), path.join(targetSkillsDir, entry.name), {
+      recursive: true,
+    });
+  }
+
+  for (const folder of skillFolders) {
+    console.log(`Installed skill ${folder.name} to ${targetSkillsDir}`);
+  }
+  console.log(`Installed ${skillFolders.length} skills to ${targetSkillsDir}`);
+}
+
 async function connectClient(
   command: string,
   args: string[],
@@ -340,6 +406,7 @@ function printUsage(): void {
   console.error('  godot-mcp --help <tool>');
   console.error('  godot-mcp <tool> [--flag value] [--params-json JSON]');
   console.error('  godot-mcp install-addon <path-to-godot-project>');
+  console.error('  godot-mcp install-skills <path-to-project>');
   console.error('');
   console.error('Common flags:');
   console.error('  --raw             Print raw JSON responses');
@@ -436,9 +503,13 @@ function printContent(result: unknown, raw: boolean): void {
 async function main(): Promise<void> {
   const parsed = parseArgs(process.argv.slice(2));
 
-  if (parsed.action === 'install') {
+  if (parsed.action === 'install' || parsed.action === 'install-skills') {
     try {
-      await copyAddon(parsed.installTarget as string);
+      if (parsed.action === 'install') {
+        await copyAddon(parsed.installTarget as string);
+      } else {
+        await copySkills(parsed.installTarget as string);
+      }
       return;
     } catch (error) {
       const err = error as Error;
