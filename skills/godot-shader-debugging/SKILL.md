@@ -1,6 +1,6 @@
 ---
 name: godot-shader-debugging
-description: Debug shaders live in a running Godot game through the godot-mcp CLI: snapshot shader state, tweak and reset uniforms, visualize UV/normals/positions, capture rendered frames, hot-reload shader source with rollback, measure frame times, and check shader warnings and project health. Use when a shader compiles but renders wrong or looks wrong, debugging shaders in a running game, tweaking uniforms live, visualizing what a shader sees, hot-reloading shader code, or capturing game frames.
+description: "Debug shaders live in a running Godot game through the godot-mcp CLI: snapshot shader state, tweak and reset uniforms, visualize UV/normals/positions, capture rendered frames, hot-reload shader source with rollback, measure frame times, and check shader warnings and project health. Use when a shader compiles but renders wrong or looks wrong, debugging shaders in a running game, tweaking uniforms live, visualizing what a shader sees, hot-reloading shader code, or capturing game frames."
 ---
 
 # Godot Shader Debugging

@@ -1,6 +1,6 @@
 ---
 name: godot-dev-workflow
-description: Drive the day-to-day Godot iteration loop through the godot-mcp CLI: inspect scenes and scripts, edit them, run the project, verify with debug output and captures, fix issues, and refresh the editor. Use when developing or iterating on a Godot project, deciding which godot-mcp tool to call for a task, or running an edit-run-verify-fix cycle.
+description: "Drive the day-to-day Godot iteration loop through the godot-mcp CLI: inspect scenes and scripts, edit them, run the project, verify with debug output and captures, fix issues, and refresh the editor. Use when developing or iterating on a Godot project, deciding which godot-mcp tool to call for a task, or running an edit-run-verify-fix cycle."
 ---
 
 # Godot Dev Workflow
