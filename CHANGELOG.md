@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.5.1 - 2026-08-27
+
+### Fixed
+- Quote frontmatter `description` fields in bundled agent skills (`godot-dev-workflow`, `godot-shader-debugging`) to prevent YAML parser errors caused by unquoted colons.
+
 ## 1.5.0 - 2026-08-13
 
 ### Added
