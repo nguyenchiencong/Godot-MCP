@@ -73,7 +73,6 @@ Godot Engine APIs
 - `shader_commands.gd` - Shader authoring plus runtime shader material/uniform tools
 - `mcp_enhanced_commands.gd` - Runtime inspection
 - `mcp_asset_commands.gd` - Asset operations
-- `mcp_script_resource_commands.gd` - Script and resource operations
 
 ### Diagnostics & Feedback
 

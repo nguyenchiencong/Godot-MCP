@@ -32,6 +32,7 @@ server/README.md
 Thumbs.db
 
 # Build artifacts
+*.tsbuildinfo
 *.o
 *.os
 *.obj
@@ -54,3 +55,4 @@ examples/
 .claude/
 .mcp.json
 opencode.json
+.pi/
