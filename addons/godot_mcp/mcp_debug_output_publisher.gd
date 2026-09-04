@@ -31,6 +31,9 @@ var websocket_server: MCPWebSocketServer
 var _subscribers: Dictionary = {}
 var _elapsed := 0.0
 var _last_length := 0
+var _last_probe_count: int = -1
+var _last_probe_first_line := ""
+var _last_probe_last_line := ""
 var _cached_output_control: Control = null
 var _cached_output_control_path := NodePath()
 var _initial_output_locate_attempted := false
@@ -125,16 +128,16 @@ func _process(delta: float) -> void:
 	_publish_incremental_frame()
 
 func _initialize_baseline() -> void:
+	_reset_line_probe()
 	var current_text := _fetch_log_text()
-	if current_text == null:
-		_last_length = 0
-	else:
-		_last_length = current_text.length()
+	_last_length = current_text.length()
 
 func _publish_incremental_frame() -> void:
-	var text := _fetch_log_text()
-	if text == null:
+	var control := _get_output_control()
+	if _output_control_unchanged_since_last_fetch(control):
 		return
+
+	var text := _fetch_log_text(control)
 
 	var reset := false
 	if text.length() < _last_length:
@@ -173,13 +176,49 @@ func _publish_incremental_frame() -> void:
 	for client_id in _subscribers.keys():
 		_send_event_to_client(int(client_id), payload)
 
+# Returns true only when the output control provably has not changed since the
+# last fetch: same line count and identical first and last lines. Godot 4.3+
+# trims the editor Output dock from the top (run/output/max_lines), so a
+# constant line count alone does not imply unchanged text: a top trim rewrites
+# line 0 and an append rewrites the last line. Controls without a cheap line
+# probe (for example RichTextLabel, which has get_line_count but no get_line)
+# are never gated and are fetched every tick as before.
+func _output_control_unchanged_since_last_fetch(control: Control) -> bool:
+	if not is_instance_valid(control):
+		_reset_line_probe()
+		return false
+	if not control.has_method("get_line_count") or not control.has_method("get_line"):
+		return false
+	var count := int(control.call("get_line_count"))
+	if count <= 0:
+		_reset_line_probe()
+		return false
+	var first_line := String(control.call("get_line", 0))
+	var last_line := String(control.call("get_line", count - 1))
+	var unchanged: bool = (
+		count == _last_probe_count
+		and first_line == _last_probe_first_line
+		and last_line == _last_probe_last_line
+	)
+	_last_probe_count = count
+	_last_probe_first_line = first_line
+	_last_probe_last_line = last_line
+	return unchanged
+
+func _reset_line_probe() -> void:
+	_last_probe_count = -1
+	_last_probe_first_line = ""
+	_last_probe_last_line = ""
+
 func _send_event_to_client(client_id: int, payload: Dictionary) -> void:
 	if websocket_server == null:
 		return
 	websocket_server.send_event(client_id, payload)
 
-func _fetch_log_text() -> String:
-	var control := _get_output_control()
+func _fetch_log_text(known_control: Control = null) -> String:
+	var control: Control = known_control
+	if not is_instance_valid(control):
+		control = _get_output_control()
 	var detail_notes: Array = []
 	var text := ""
 	_last_control_class = ""
@@ -691,6 +730,7 @@ func clear_log_output() -> Dictionary:
 
 	if cleared:
 		_last_length = 0
+		_reset_line_probe()
 		_broadcast_log_reset()
 
 	diagnostics["cleared"] = cleared

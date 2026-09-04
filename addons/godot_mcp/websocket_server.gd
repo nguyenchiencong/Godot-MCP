@@ -9,6 +9,8 @@ signal command_received(client_id, command)
 var tcp_server = TCPServer.new()
 var peers = {}
 var _port = 9080
+var _next_client_id: int = 1
+var _to_remove: Array = []
 
 func _ready():
 	set_process(false)
@@ -71,20 +73,22 @@ func poll() -> void:
 		var err = ws.accept_stream(tcp)
 		if err != OK:
 			print("Failed to accept WebSocket stream: ", err)
+			tcp.disconnect_from_host()
 			return
 		
 		# Generate client ID and store peer
-		var client_id = randi() % (1 << 30) + 1
+		var client_id := _next_client_id
+		_next_client_id += 1
 		peers[client_id] = ws
 		print("WebSocket connection setup for client: ", client_id)
 	
 	# Process existing connections
-	var to_remove = []
+	_to_remove.clear()
 	
 	for client_id in peers:
 		var peer = peers[client_id]
 		if peer == null:
-			to_remove.append(client_id)
+			_to_remove.append(client_id)
 			continue
 			
 		peer.poll()
@@ -98,10 +102,10 @@ func poll() -> void:
 					_handle_packet(client_id, packet)
 					
 			WebSocketPeer.STATE_CONNECTING:
-				print("Client %d still connecting..." % client_id)
+				pass
 				
 			WebSocketPeer.STATE_CLOSING:
-				print("Client %d closing connection..." % client_id)
+				pass
 				
 			WebSocketPeer.STATE_CLOSED:
 				print("Client %d connection closed. Code: %d, Reason: %s" % [
@@ -110,10 +114,10 @@ func poll() -> void:
 					peer.get_close_reason()
 				])
 				emit_signal("client_disconnected", client_id)
-				to_remove.append(client_id)
+				_to_remove.append(client_id)
 	
 	# Remove disconnected clients
-	for client_id in to_remove:
+	for client_id in _to_remove:
 		var peer = peers[client_id]
 		if peer != null:
 			peer.close()
@@ -177,8 +181,9 @@ func send_event(client_id: int, event: Dictionary) -> int:
 	if peer == null or peer.get_ready_state() != WebSocketPeer.STATE_OPEN:
 		return ERR_UNAVAILABLE
 
-	var payload := event.duplicate(true)
+	var payload: Dictionary = event
 	if not payload.has("event"):
+		payload = event.duplicate(true)
 		payload["event"] = "unknown"
 
 	var json_text = JSON.stringify(payload)

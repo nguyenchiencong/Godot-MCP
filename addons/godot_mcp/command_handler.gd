@@ -2,6 +2,21 @@
 class_name MCPCommandHandler
 extends Node
 
+const ENHANCED_COMMANDS: Array[String] = [
+	"get_editor_scene_structure",
+	"get_runtime_scene_structure",
+	"get_debug_output",
+	"get_editor_errors",
+	"get_stack_trace_panel",
+	"get_stack_frames_panel",
+	"evaluate_runtime",
+	"clear_debug_output",
+	"clear_editor_errors",
+	"subscribe_debug_output",
+	"unsubscribe_debug_output",
+	"update_node_transform"
+]
+
 var _websocket_server
 var _command_processors = []
 var _enhanced_processor = null
@@ -58,7 +73,6 @@ func _initialize_command_processors():
 	_command_processors.append(shader_commands)
 	
 	# Try to load optional command classes
-	var script_resource_commands = _try_load_optional_command("res://addons/godot_mcp/mcp_script_resource_commands.gd")
 	var enhanced_commands = _try_load_optional_command("res://addons/godot_mcp/mcp_enhanced_commands.gd")
 	var asset_commands = _try_load_optional_command("res://addons/godot_mcp/mcp_asset_commands.gd")
 	_enhanced_processor = enhanced_commands
@@ -89,8 +103,6 @@ func _initialize_command_processors():
 	print("- Validation Commands")
 	print("- Shader Commands")
 	
-	if script_resource_commands:
-		print("- Script Resource Commands")
 	if enhanced_commands:
 		print("- Enhanced Commands")
 	if asset_commands:
@@ -116,21 +128,7 @@ func _handle_command(client_id: int, command: Dictionary) -> void:
 	print("Processing command: %s" % command_type)
 	
 	# Special handling for enhanced commands
-	var enhanced_commands = [
-		"get_editor_scene_structure",
-		"get_runtime_scene_structure",
-		"get_debug_output",
-		"get_editor_errors",
-		"get_stack_trace_panel",
-		"get_stack_frames_panel",
-		"evaluate_runtime",
-		"clear_debug_output",
-		"clear_editor_errors",
-		"subscribe_debug_output",
-		"unsubscribe_debug_output",
-		"update_node_transform"
-	]
-	if command_type in enhanced_commands and _enhanced_processor != null:
+	if command_type in ENHANCED_COMMANDS and _enhanced_processor != null:
 		# Dispatch straight to the cached enhanced processor instead of scanning
 		# the processor list for its script path on every enhanced command.
 		var handled = await _call_processor(_enhanced_processor, client_id, command_type, params, command_id)

@@ -404,7 +404,9 @@ func _on_session_stopped(session_id: int) -> void:
 	var state: Dictionary = _sessions[session_id]
 	state["active"] = false
 	# Replies are scoped to one debugger session lifetime. Discard them on
-	# teardown so stopped games cannot leave stale shader payloads behind.
+	# teardown so stopped games cannot leave stale payloads behind.
+	state["eval_results"] = {}
+	state["input_results"] = {}
 	state["shader_results"] = {}
 	_sessions[session_id] = state
 	_trace("session %s stopped" % session_id)
@@ -465,6 +467,7 @@ func _store_input_result(session_id: int, payload: Array) -> void:
 	var state: Dictionary = _sessions.get(session_id, {})
 	var results: Dictionary = state.get("input_results", {})
 	results[request_id] = result_dict
+	_cap_result_store(results)
 	state["input_results"] = results
 	_sessions[session_id] = state
 	

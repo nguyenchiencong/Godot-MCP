@@ -33,7 +33,7 @@ extends MCPBaseCommandProcessor
 
 # Engine-metadata key for the shared subprocess diagnostics cache. GDScript
 # has no static class variables, so the cache lives process-wide in Engine
-# metadata (same pattern as ScriptUtils' regex cache).
+# metadata (same pattern as the regex cache).
 const SUBPROCESS_CACHE_META_KEY := "GodotMCPDiagnosticsSubprocessCache"
 
 # Cache of headless-subprocess diagnostic results keyed by
