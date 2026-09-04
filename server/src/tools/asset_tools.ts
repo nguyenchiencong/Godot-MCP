@@ -20,6 +20,10 @@ export const assetTools: MCPTool[] = [
       try {
         const result = await godot.sendCommand('list_assets_by_type', { type });
         
+        if (result && typeof result === 'object' && result.error) {
+          throw new Error(result.error);
+        }
+
         // Format the results into human-readable output
         const assetCount = result.count || 0;
         const assetType = result.assetType || type;

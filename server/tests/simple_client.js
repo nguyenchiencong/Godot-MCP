@@ -1,5 +1,5 @@
 // The simplest possible WebSocket client
-const WebSocket = require('ws');
+import WebSocket from 'ws';
 
 console.log('=== STARTING ULTRA SIMPLE WEBSOCKET CLIENT ===');
 

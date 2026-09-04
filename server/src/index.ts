@@ -6,7 +6,6 @@ import { sceneTools } from './tools/scene_tools.js';
 import { editorTools } from './tools/editor_tools.js';
 import { assetTools } from './tools/asset_tools.js';
 import { enhancedTools } from './tools/enhanced_tools.js';
-import { scriptResourceTools } from './tools/script_resource_tools.js';
 import { debuggerTools } from './tools/debugger_tools.js';
 import { projectTools } from './tools/project_tools.js';
 import { inputTools } from './tools/input_tools.js';
@@ -66,7 +65,6 @@ async function main() {
     ...assetTools,
     ...enhancedTools,
     ...projectTools,
-    ...scriptResourceTools,
     ...debuggerTools,
     ...inputTools,
     ...captureTools,
@@ -76,8 +74,8 @@ async function main() {
 
   allTools.forEach(tool => {
     server.addTool(tool);
-    console.error(`Registered tool: ${tool.name}`);
   });
+  console.error(`Registered ${allTools.length} tools`);
 
   // Register all resources
   server.addResource(sceneListResource);
@@ -103,15 +101,14 @@ async function main() {
   console.error('All resources and tools registered');
 
   // Try to connect to Godot
-  try {
-    const godot = getGodotConnection();
-    await godot.connect();
-    console.error('Successfully connected to Godot WebSocket server');
-  } catch (error) {
-    const err = error as Error;
-    console.warn(`Could not connect to Godot: ${err.message}`);
-    console.warn('Will retry connection when commands are executed');
-  }
+  const godot = getGodotConnection();
+  godot.connect().then(
+    () => console.error('Successfully connected to Godot WebSocket server'),
+    (error) => {
+      console.warn(`Could not connect to Godot: ${(error as Error).message}`);
+      console.warn('Will retry connection when commands are executed');
+    }
+  );
 
   // Start the server
 

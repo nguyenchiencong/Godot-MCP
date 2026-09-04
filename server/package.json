@@ -21,7 +21,6 @@
     "test:cli": "node tests/cli.test.js",
     "test:connection": "node tests/godot_connection.test.js",
     "test:async-diagnostics": "node tests/async_diagnostics.test.js",
-    "test:debugger": "node tests/debugger.test.js",
     "prepublishOnly": "npm run build && node -e \"require('fs').cpSync('../addons/godot_mcp','./addons/godot_mcp',{recursive:true});require('fs').cpSync('../README.md','./README.md');require('fs').cpSync('../skills','./skills',{recursive:true})\"",
     "postpublish": "node -e \"require('fs').rmSync('./addons',{recursive:true,force:true});require('fs').rmSync('./README.md',{force:true});require('fs').rmSync('./skills',{recursive:true,force:true})\""
   },
@@ -48,6 +47,7 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.24.3",
     "fastmcp": "^3.25.4",
     "ws": "^8.13.0",
     "zod": "4.1.13"

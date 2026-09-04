@@ -66,7 +66,7 @@ export const scriptByPathResourceTemplate = {
         normalizedPath = `res://${normalizedPath}`;
       }
 
-      const result = await godot.sendCommand('get_script', { path: normalizedPath });
+      const result = await godot.sendCommand('get_script', { script_path: normalizedPath });
 
       if (!result || result.script_found === false) {
         const message = result?.error ?? `Script not found at ${normalizedPath}`;

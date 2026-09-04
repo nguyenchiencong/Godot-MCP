@@ -1,5 +1,7 @@
 {
   "compilerOptions": {
+    "incremental": true,
+    "tsBuildInfoFile": "./dist/.tsbuildinfo",
     "module": "ESNext",
     "moduleResolution": "node",
     "esModuleInterop": true,

@@ -43,7 +43,6 @@ import { assetTools } from '../dist/tools/asset_tools.js';
 import { debuggerTools } from '../dist/tools/debugger_tools.js';
 import { inputTools } from '../dist/tools/input_tools.js';
 import { enhancedTools } from '../dist/tools/enhanced_tools.js';
-import { scriptResourceTools } from '../dist/tools/script_resource_tools.js';
 import { captureTools } from '../dist/tools/capture_tools.js';
 import { diagnosticsTools } from '../dist/tools/diagnostics_tools.js';
 import { shaderTools } from '../dist/tools/shader_tools.js';
@@ -105,7 +104,6 @@ const allTools = [
 	...debuggerTools,
 	...inputTools,
 	...enhancedTools,
-	...scriptResourceTools,
 	...captureTools,
 	...diagnosticsTools,
 	...shaderTools,
@@ -1095,6 +1093,11 @@ print("Cleaned up test project guide")
 				params: {},
 				validate: (result) => true,
 				expectError: true
+			},
+			{
+				tool: 'update_node_transform',
+				params: { node_path: '.', position: [1, 2] },
+				validate: (result) => result.includes('Node transform updated') || result.includes('updated')
 			}
 		]
 	}

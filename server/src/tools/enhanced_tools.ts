@@ -648,4 +648,45 @@ export const enhancedTools: MCPTool[] = [
       }
     },
   },
+  {
+    name: 'update_node_transform',
+    description: 'Update the transform (position, rotation, scale) of a node in the current scene',
+    parameters: z.object({
+      node_path: z.string()
+        .describe('Path to the node to update (e.g. "./Player")'),
+      position: z.array(z.number()).min(2).optional()
+        .describe('New position as [x, y] coordinates (2D scenes)'),
+      rotation: z.number().optional()
+        .describe('New rotation in radians'),
+      scale: z.array(z.number()).min(2).optional()
+        .describe('New scale as [x, y] factors (2D scenes)'),
+    }),
+    execute: async ({ node_path, position, rotation, scale }): Promise<string> => {
+      const godot = getGodotConnection();
+
+      try {
+        const params: Record<string, unknown> = { node_path };
+        if (position !== undefined) params.position = position;
+        if (rotation !== undefined) params.rotation = rotation;
+        if (scale !== undefined) params.scale = scale;
+
+        const result = await godot.sendCommand('update_node_transform', params);
+
+        if (result && typeof result === 'object' && result.error) {
+          throw new Error(result.error);
+        }
+
+        const updated = result?.updated;
+        const updatedFields: string[] = [];
+        if (updated?.position) updatedFields.push('position');
+        if (updated?.rotation) updatedFields.push('rotation');
+        if (updated?.scale) updatedFields.push('scale');
+
+        const details = updatedFields.length > 0 ? ` (${updatedFields.join(', ')})` : '';
+        return `Node transform updated: ${node_path}${details}`;
+      } catch (error) {
+        throw new Error(`Failed to update node transform: ${(error as Error).message}`);
+      }
+    },
+  },
 ];
