@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.6.0 - 2026-09-04
+
+### Added
+- `update_node_transform` MCP tool that updates a node's position (`[x, y]`), rotation (radians) and scale (`[x, y]`) in the currently edited 2D scene via the existing editor-side enhanced command; includes a live-editor test in the enhanced test category
+
+### Fixed
+- `godot/script/{path}` resource template now sends the `script_path` parameter the script command handler expects; it previously always failed with "Either script_path or node_path must be provided"
+- `list_assets_by_type` with an unknown asset type now surfaces the error to the caller instead of returning a success payload that looked like "no assets found"
+- WebSocket server disconnects the TCP socket when the WebSocket handshake fails instead of leaking it, and assigns monotonic client ids so a random-id collision can no longer silently overwrite a live client
+- Runtime debugger bridge bounds pending `input_results` with the same 64-entry cap as eval/shader results and clears eval/input result stores when a debug session stops, preventing slow unbounded growth across many game run/stop cycles
+
+### Changed
+- MCP server startup no longer blocks on the Godot connection attempt: stdio serving starts immediately and the initial connection retries in the background (cold start with the editor closed drops from a multi-second delay to instant; tool calls auto-connect on demand)
+- Debug output publisher skips full output-dock text refetches only when the control is provably unchanged (same line count and identical first/last lines, safe against Godot 4.3+ top-trimming of the Output dock); controls without a cheap line probe (e.g. RichTextLabel) are fetched every tick as before
+- WebSocket event payloads are no longer deep-copied per subscriber; per-frame CONNECTING/CLOSING state prints and per-frame array allocations removed from the websocket poll loop; enhanced command list hoisted to a file-scope constant
+- TypeScript builds use incremental compilation with `tsBuildInfoFile` stored inside `dist/` so deleting `dist/` always resets build state
+
+### Removed
+- Empty `scriptResourceTools` tool module, the fully shadowed `mcp_script_resource_commands.gd` editor processor (its `get_script`/`edit_script` commands were always handled first by `script_commands.gd`), and the unused `node_utils.gd` / `script_utils.gd` / `resource_utils.gd` utility scripts
+- Broken `test:debugger` npm script that pointed at a nonexistent file (use `node tests/tools.test.js --category=debugger` from `server/` instead); `tests/simple_client.js` converted from CommonJS to ESM to match the package
+
 ## 1.5.1 - 2026-08-27
 
 ### Fixed
